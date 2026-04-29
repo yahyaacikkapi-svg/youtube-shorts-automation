@@ -1,0 +1,57 @@
+name: YouTube Shorts Auto-Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      privacy:
+        description: "Video privacy (private/unlisted/public)"
+        required: false
+        default: "private"
+
+  schedule:
+    # 06:00, 11:00, 16:00 UTC = TR 09:00, 14:00, 19:00 (3 videos/day)
+    - cron: "0 6,11,16 * * *"
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run automation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          PRIVACY="${{ github.event.inputs.privacy || 'private' }}"
+          if [ "$PRIVACY" = "public" ]; then
+            python shorts_automation.py --public
+          else
+            python shorts_automation.py
+          fi
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-output
+          path: outputs/
+          retention-days: 3

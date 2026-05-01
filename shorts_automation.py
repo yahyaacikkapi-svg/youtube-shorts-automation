@@ -152,7 +152,7 @@ async def _generate_voice_async(text, audio_path, srt_path):
             continue
         start_s = group[0].start.total_seconds()
         end_s = group[-1].end.total_seconds()
-        text_chunk = " ".join(c.text for c in group).upper()
+        text_chunk = " ".join(c.content for c in group).upper()
         srt_lines.append(f"{idx}\n{_fmt_time(start_s)} --> {_fmt_time(end_s)}\n{text_chunk}\n")
         idx += 1
     Path(srt_path).write_text("\n".join(srt_lines), encoding="utf-8")

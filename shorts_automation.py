@@ -133,7 +133,7 @@ Output JSON only, nothing else."""
 # --------- 2. Generate TTS audio with subtitles ---------
 async def _generate_voice_async(text, audio_path, srt_path):
     sub_maker = SubMaker()
-    communicate = edge_tts.Communicate(text, VOICE, rate="+5%")
+    communicate = edge_tts.Communicate(text, VOICE, rate="+5%", boundary="WordBoundary")
     with open(audio_path, "wb") as audio_file:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":

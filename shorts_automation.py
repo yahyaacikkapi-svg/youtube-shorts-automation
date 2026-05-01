@@ -74,7 +74,7 @@ def generate_fun_fact():
         raise RuntimeError("GEMINI_API_KEY .env'de yok")
 
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")  # ücretsiz, hızlı
+    model = genai.GenerativeModel("gemini-2.5-flash-lite")  # ücretsiz, hızlı
 
     topics = [
         "a cognitive bias that secretly controls everyday decisions",

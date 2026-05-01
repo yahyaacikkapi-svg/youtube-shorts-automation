@@ -9,8 +9,8 @@ on:
         default: "private"
 
   schedule:
-    # 06:00, 11:00, 16:00 UTC = TR 09:00, 14:00, 19:00 (3 videos/day)
-    - cron: "0 6,11,16 * * *"
+    # 16:00 + 22:00 UTC = TR 19:00 + 01:00 / US East 12:00 + 18:00 (2 videos/day)
+    - cron: "0 16,22 * * *"
 
 jobs:
   generate-and-upload:

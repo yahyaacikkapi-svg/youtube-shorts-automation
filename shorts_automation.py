@@ -222,8 +222,8 @@ def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_pat
         f"scale=1080:1920:force_original_aspect_ratio=increase,"
         f"crop=1080:1920,"
         f"subtitles='{srt_str}':force_style='"
-        f"FontName=Impact,FontSize=18,PrimaryColour=&H00FFFFFF,"
-        f"OutlineColour=&H00000000,Outline=3,Shadow=0,Alignment=2,MarginV=140,Bold=1'"
+        f"FontName=Impact,FontSize=14,PrimaryColour=&H00FFFFFF,"
+        f"OutlineColour=&H00000000,Outline=3,Shadow=0,Alignment=2,MarginV=80,Bold=1'"
     )
     cmd = [
         "ffmpeg", "-y",

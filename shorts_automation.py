@@ -58,7 +58,7 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16
 TARGET_DURATION_RANGE = (28, 55)  # seconds
-VOICE = "en-US-AndrewMultilingualNeural"  # more expressive, dynamic narrator
+VOICE = "en-US-GuyNeural"  # high-energy narrator
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
@@ -141,18 +141,26 @@ async def _generate_voice_async(text, audio_path, srt_path):
             elif chunk["type"] == "WordBoundary":
                 sub_maker.feed(chunk)
 
-    # Generate SRT-style subs (word-grouped to ~3 words per cue for Shorts feel)
+    # Generate SRT subs with alternating white/yellow word colors (ASS override tags)
     srt_lines = []
     cues = sub_maker.cues
     group_size = 3
     idx = 1
+    word_idx = 0
+    yellow = r"{\c&H0000D7FF&}"
+    white = r"{\c&H00FFFFFF&}"
     for i in range(0, len(cues), group_size):
         group = cues[i:i + group_size]
         if not group:
             continue
         start_s = group[0].start.total_seconds()
         end_s = group[-1].end.total_seconds()
-        text_chunk = " ".join(c.content for c in group).upper()
+        parts = []
+        for c in group:
+            color = yellow if word_idx % 2 else white
+            parts.append(f"{color}{c.content.upper()}")
+            word_idx += 1
+        text_chunk = " ".join(parts)
         srt_lines.append(f"{idx}\n{_fmt_time(start_s)} --> {_fmt_time(end_s)}\n{text_chunk}\n")
         idx += 1
     Path(srt_path).write_text("\n".join(srt_lines), encoding="utf-8")
@@ -183,13 +191,19 @@ def fetch_pexels_video(keyword, min_duration_s):
         raise RuntimeError("PEXELS_API_KEY .env'de yok")
     headers = {"Authorization": PEXELS_API_KEY}
     url = "https://api.pexels.com/videos/search"
-    params = {"query": keyword, "per_page": 15, "orientation": "portrait", "size": "medium"}
+    aesthetic_query = f"{keyword} aesthetic cinematic"
+    params = {"query": aesthetic_query, "per_page": 15, "orientation": "portrait", "size": "medium"}
     r = requests.get(url, headers=headers, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
     if not data.get("videos"):
-        print(f"[pexels] '{keyword}' icin sonuc yok, 'abstract' deneniyor")
-        params["query"] = "abstract"
+        print(f"[pexels] '{aesthetic_query}' sonuc yok, '{keyword}' deneniyor")
+        params["query"] = keyword
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+        data = r.json()
+    if not data.get("videos"):
+        print(f"[pexels] sonuc yok, 'aesthetic abstract' deneniyor")
+        params["query"] = "aesthetic abstract"
         r = requests.get(url, headers=headers, params=params, timeout=30)
         data = r.json()
 
@@ -222,7 +236,7 @@ def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_pat
         f"scale=1080:1920:force_original_aspect_ratio=increase,"
         f"crop=1080:1920,"
         f"subtitles='{srt_str}':force_style='"
-        f"FontName=Impact,FontSize=11,PrimaryColour=&H0000D7FF,"
+        f"FontName=Impact,FontSize=11,PrimaryColour=&H00FFFFFF,"
         f"OutlineColour=&H00000000,Outline=3,Shadow=0,Alignment=2,MarginV=80,Bold=1'"
     )
     cmd = [

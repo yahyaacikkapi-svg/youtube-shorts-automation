@@ -2,7 +2,7 @@
 YouTube Shorts Otomasyonu
 =========================
 Tek komutla:
-  - Gemini ile fun-fact script üretir
+  - Gemini ile psikoloji/davranis bilimi script'i üretir
   - edge-tts ile İngilizce seslendirme yapar
   - Pexels'tan portre stok video çeker
   - FFmpeg ile 9:16 dikey video render eder (kelime kelime altyazılı)
@@ -21,7 +21,6 @@ import random
 import asyncio
 import argparse
 import subprocess
-import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -59,14 +58,18 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16
 TARGET_DURATION_RANGE = (28, 55)  # seconds
-VOICE = "en-US-AndrewNeural"  # natural male; alternatives: en-US-AvaNeural (female)
+VOICE = "en-US-AndrewNeural"  # warm, curious narrator-style for psychology content
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
 # --------- 1. Generate script with Gemini ---------
 def generate_fun_fact():
-    """Returns dict: {topic, script, title, description, tags, keyword}"""
+    """Returns dict: {script, title, description, tags, keyword}.
+
+    Niche: Psychology / mind games / behavioral science. Curiosity-driven
+    educational shorts about how the human mind actually works.
+    """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY .env'de yok")
 
@@ -74,29 +77,42 @@ def generate_fun_fact():
     model = genai.GenerativeModel("gemini-2.0-flash-exp")  # ücretsiz, hızlı
 
     topics = [
-        "an oddly specific historical event most people don't know",
-        "a counterintuitive psychology fact",
-        "a mind-blowing fact about space or astronomy",
-        "a strange biology or animal fact",
-        "a surprising fact about human body",
-        "an unexpected fact about a common everyday object",
-        "a weird fact about ancient civilizations",
-        "a science fact that sounds fake but is real",
+        "a cognitive bias that secretly controls everyday decisions",
+        "a counterintuitive truth about how memory actually works",
+        "a manipulation tactic used by con artists and advertisers",
+        "a quirk of human attention or perception that feels like a glitch",
+        "a social psychology experiment with a disturbing result",
+        "a weird thing the brain does during sleep or dreaming",
+        "a mind hack backed by research that improves focus, sleep, or mood",
+        "an unsettling fact about why people lie, cheat, or conform",
+        "a hidden mechanism behind anxiety, motivation, or procrastination",
+        "a habit-formation insight that sounds simple but is rarely applied",
     ]
     topic_seed = random.choice(topics)
 
-    prompt = f"""You are a YouTube Shorts writer. Generate a viral fun-fact short video.
+    prompt = f"""You are a YouTube Shorts writer for a psychology / mind-science channel.
+Your videos feel like a mix of Veritasium and a behavioral science podcast - curious,
+slightly unsettling, deeply human. They make viewers say "wait, what?" in 3 seconds.
 
 Topic seed: {topic_seed}
 
+Voice rules:
+- Open with a hook sentence that disrupts expectations (NEVER start with "Did you know").
+  Examples of strong hooks: "Your brain just lied to you.", "The smartest people fall
+  for this every time.", "There's a reason you hate Mondays - and it's not what you think."
+- Use a real research finding or named effect when possible (Asch conformity, Dunning-Kruger,
+  Zeigarnik effect, mere exposure, loss aversion, spotlight effect, etc.).
+- Specific, concrete examples beat vague abstractions.
+- End with: "Follow for more reasons your brain is weird."
+
 Return ONLY valid JSON with these keys:
-- "script": the spoken voiceover, 75-105 words, conversational, hook-first sentence,
-  ending with "Follow for more facts you didn't know." NO emojis, NO markdown,
-  NO sound effects in brackets, just plain spoken text.
+- "script": the spoken voiceover, 75-105 words, conversational, hook-first.
+  NO emojis, NO markdown, NO sound effects in brackets, just plain spoken text.
 - "title": YouTube Shorts title, max 70 chars, attention-grabbing, ends with #Shorts
-- "description": 2 short sentences + 8 hashtags
-- "tags": JSON array of 12 SEO tags
-- "keyword": ONE word for stock video search (e.g. "ocean", "space", "brain")
+- "description": 2 short sentences + 8 hashtags (include #psychology #mindset)
+- "tags": JSON array of 12 SEO tags (mix of psychology, mind, brain, behavior terms)
+- "keyword": ONE word for stock video search - pick something visually evocative that
+  fits the topic mood (e.g. "brain", "crowd", "mirror", "eyes", "city", "abstract")
 
 Output JSON only, nothing else."""
 
@@ -110,7 +126,7 @@ Output JSON only, nothing else."""
     )
     data = json.loads(response.text)
     print(f"[script] Konu: {data['keyword']}")
-    print(f"[script] Başlık: {data['title']}")
+    print(f"[script] Baslik: {data['title']}")
     return data
 
 
@@ -151,14 +167,13 @@ def _fmt_time(s):
 
 def generate_voice(text, audio_path, srt_path):
     asyncio.run(_generate_voice_async(text, audio_path, srt_path))
-    # Get audio duration via ffprobe
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
         capture_output=True, text=True, check=True,
     )
     duration = float(out.stdout.strip())
-    print(f"[voice] {duration:.1f}s ses üretildi -> {audio_path.name}")
+    print(f"[voice] {duration:.1f}s ses uretildi -> {audio_path.name}")
     return duration
 
 
@@ -167,31 +182,28 @@ def fetch_pexels_video(keyword, min_duration_s):
     if not PEXELS_API_KEY:
         raise RuntimeError("PEXELS_API_KEY .env'de yok")
     headers = {"Authorization": PEXELS_API_KEY}
-    url = f"https://api.pexels.com/videos/search"
+    url = "https://api.pexels.com/videos/search"
     params = {"query": keyword, "per_page": 15, "orientation": "portrait", "size": "medium"}
     r = requests.get(url, headers=headers, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
     if not data.get("videos"):
-        # Fallback to a generic keyword
-        print(f"[pexels] '{keyword}' için sonuç yok, 'abstract' deneniyor")
+        print(f"[pexels] '{keyword}' icin sonuc yok, 'abstract' deneniyor")
         params["query"] = "abstract"
         r = requests.get(url, headers=headers, params=params, timeout=30)
         data = r.json()
 
-    # Pick the first video that's long enough
     for v in data["videos"]:
         if v["duration"] >= min_duration_s:
             for f in v["video_files"]:
                 if f.get("file_type") == "video/mp4" and f.get("width", 0) >= 720:
                     print(f"[pexels] {f['width']}x{f['height']}, {v['duration']}s")
                     return f["link"]
-    # If none long enough, take the longest one and we'll loop
     longest = max(data["videos"], key=lambda v: v["duration"])
     for f in longest["video_files"]:
         if f.get("file_type") == "video/mp4":
             return f["link"]
-    raise RuntimeError("Pexels'tan uygun video bulunamadı")
+    raise RuntimeError("Pexels'tan uygun video bulunamadi")
 
 
 def download_file(url, dest):
@@ -205,16 +217,6 @@ def download_file(url, dest):
 
 # --------- 4. Render final video with ffmpeg ---------
 def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_path):
-    """
-    - Crop/scale bg to 1080x1920
-    - Loop bg if shorter than audio
-    - Mix audio (replace bg sound)
-    - Burn subtitles in
-    """
-    # ffmpeg complex filter:
-    # [0:v] -> scale & crop to 1080x1920, loop if needed
-    # [1:a] -> use as audio
-    # subtitles=... burn-in
     srt_str = str(srt_path).replace("\\", "/").replace(":", "\\:")
     vf = (
         f"scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -237,21 +239,21 @@ def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_pat
         "-r", "30",
         str(output_path),
     ]
-    print("[render] FFmpeg çalışıyor...")
+    print("[render] FFmpeg calisiyor...")
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(res.stderr[-2000:])
-        raise RuntimeError("FFmpeg render başarısız")
-    print(f"[render] Hazır -> {output_path.name}")
+        raise RuntimeError("FFmpeg render basarisiz")
+    print(f"[render] Hazir -> {output_path.name}")
 
 
 # --------- 5. YouTube OAuth + Upload ---------
 def get_youtube_creds():
     """
-    İki mod:
+    Iki mod:
       1) GitHub Actions / headless: env var'larda CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN
-         varsa onları kullan (interaktif değil).
-      2) Local geliştirme: credentials.json + token.json kullan, gerekirse browser aç.
+         varsa onlari kullan (interaktif degil).
+      2) Local gelistirme: credentials.json + token.json kullan, gerekirse browser ac.
     """
     refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
     client_id = os.getenv("YOUTUBE_CLIENT_ID")
@@ -294,7 +296,7 @@ def upload_to_youtube(video_path, title, description, tags, privacy="private"):
             "title": title[:100],
             "description": description[:5000],
             "tags": tags[:30],
-            "categoryId": "27",  # Education
+            "categoryId": "27",
         },
         "status": {
             "privacyStatus": privacy,
@@ -306,7 +308,7 @@ def upload_to_youtube(video_path, title, description, tags, privacy="private"):
     response = None
     while response is None:
         status, response = request.next_chunk()
-    print(f"[upload] Yüklendi: https://youtube.com/watch?v={response['id']}")
+    print(f"[upload] Yuklendi: https://youtube.com/watch?v={response['id']}")
     return response["id"]
 
 
@@ -315,29 +317,24 @@ def run_pipeline(skip_upload=False, privacy="private"):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir = OUTPUT_DIR / ts
     workdir.mkdir(exist_ok=True)
-    print(f"[main] Çalışma klasörü: {workdir}")
+    print(f"[main] Calisma klasoru: {workdir}")
 
-    # 1. Script
     meta = generate_fun_fact()
     (workdir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
-    # 2. Voice + subs
     audio_path = workdir / "voice.mp3"
     srt_path = workdir / "subs.srt"
     duration = generate_voice(meta["script"], audio_path, srt_path)
 
-    # 3. Stock video
     bg_url = fetch_pexels_video(meta["keyword"], min_duration_s=duration)
     bg_path = workdir / "bg.mp4"
     download_file(bg_url, bg_path)
 
-    # 4. Render
     out_path = workdir / "short.mp4"
     render_video(bg_path, audio_path, srt_path, duration, out_path)
 
-    # 5. Upload
     if skip_upload:
-        print(f"[main] Yükleme atlandı. Video: {out_path}")
+        print(f"[main] Yukleme atlandi. Video: {out_path}")
         return out_path
     video_id = upload_to_youtube(
         out_path,
@@ -353,8 +350,8 @@ def run_pipeline(skip_upload=False, privacy="private"):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--auth", action="store_true", help="Sadece YouTube OAuth (ilk kez)")
-    p.add_argument("--no-upload", action="store_true", help="Üret ama yükleme")
-    p.add_argument("--public", action="store_true", help="Public yayınla (default: private)")
+    p.add_argument("--no-upload", action="store_true", help="Uret ama yukleme")
+    p.add_argument("--public", action="store_true", help="Public yayinla (default: private)")
     args = p.parse_args()
 
     if args.auth:

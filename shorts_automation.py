@@ -58,7 +58,7 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16
 TARGET_DURATION_RANGE = (28, 55)  # seconds
-VOICE = "en-US-AndrewNeural"  # warm, curious narrator-style for psychology content
+VOICE = "en-US-AndrewMultilingualNeural"  # more expressive, dynamic narrator
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
@@ -133,7 +133,7 @@ Output JSON only, nothing else."""
 # --------- 2. Generate TTS audio with subtitles ---------
 async def _generate_voice_async(text, audio_path, srt_path):
     sub_maker = SubMaker()
-    communicate = edge_tts.Communicate(text, VOICE, rate="+5%", boundary="WordBoundary")
+    communicate = edge_tts.Communicate(text, VOICE, rate="+10%", boundary="WordBoundary")
     with open(audio_path, "wb") as audio_file:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":

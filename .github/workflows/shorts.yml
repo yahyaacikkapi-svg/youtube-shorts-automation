@@ -6,7 +6,7 @@ on:
       privacy:
         description: "Video privacy (private/unlisted/public)"
         required: false
-        default: "private"
+        default: "public"
 
   schedule:
     # 16:00 + 22:00 UTC = TR 19:00 + 01:00 / US East 12:00 + 18:00 (2 videos/day)
@@ -41,7 +41,7 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          PRIVACY="${{ github.event.inputs.privacy || 'private' }}"
+          PRIVACY="${{ github.event.inputs.privacy || 'public' }}"
           if [ "$PRIVACY" = "public" ]; then
             python shorts_automation.py --public
           else

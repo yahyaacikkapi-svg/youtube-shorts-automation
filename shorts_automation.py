@@ -157,7 +157,7 @@ async def _generate_voice_async(text, audio_path, srt_path):
         end_s = group[-1].end.total_seconds()
         parts = []
         for c in group:
-            color = yellow if word_idx % 2 else white
+            color = yellow if word_idx % 3 == 1 else white
             parts.append(f"{color}{c.content.upper()}")
             word_idx += 1
         text_chunk = " ".join(parts)

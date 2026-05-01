@@ -17,6 +17,7 @@ Kullanım:
 import os
 import sys
 import json
+import time
 import random
 import asyncio
 import argparse
@@ -302,9 +303,15 @@ def get_youtube_creds():
     return creds
 
 
-def upload_to_youtube(video_path, title, description, tags, privacy="private"):
+def upload_to_youtube(video_path, title, description, tags, privacy="private", publish_at=None):
     creds = get_youtube_creds()
     youtube = build("youtube", "v3", credentials=creds)
+    status = {
+        "privacyStatus": "private" if publish_at else privacy,
+        "selfDeclaredMadeForKids": False,
+    }
+    if publish_at:
+        status["publishAt"] = publish_at
     body = {
         "snippet": {
             "title": title[:100],
@@ -312,22 +319,21 @@ def upload_to_youtube(video_path, title, description, tags, privacy="private"):
             "tags": tags[:30],
             "categoryId": "27",
         },
-        "status": {
-            "privacyStatus": privacy,
-            "selfDeclaredMadeForKids": False,
-        },
+        "status": status,
     }
     media = MediaFileUpload(str(video_path), chunksize=-1, resumable=True, mimetype="video/mp4")
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
     while response is None:
-        status, response = request.next_chunk()
+        s, response = request.next_chunk()
     print(f"[upload] Yuklendi: https://youtube.com/watch?v={response['id']}")
+    if publish_at:
+        print(f"[upload] Public olacak: {publish_at}")
     return response["id"]
 
 
 # --------- Main pipeline ---------
-def run_pipeline(skip_upload=False, privacy="private"):
+def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir = OUTPUT_DIR / ts
     workdir.mkdir(exist_ok=True)
@@ -350,12 +356,18 @@ def run_pipeline(skip_upload=False, privacy="private"):
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")
         return out_path
+    publish_at = None
+    if auto_public_after > 0 and privacy != "public":
+        from datetime import timedelta, timezone
+        dt = datetime.now(timezone.utc) + timedelta(seconds=auto_public_after)
+        publish_at = dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     video_id = upload_to_youtube(
         out_path,
         meta["title"],
         meta["description"],
         meta["tags"],
         privacy=privacy,
+        publish_at=publish_at,
     )
     print(f"[main] Tamam. Video ID: {video_id}")
     return out_path
@@ -365,7 +377,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--auth", action="store_true", help="Sadece YouTube OAuth (ilk kez)")
     p.add_argument("--no-upload", action="store_true", help="Uret ama yukleme")
-    p.add_argument("--public", action="store_true", help="Public yayinla (default: private)")
+    p.add_argument("--public", action="store_true", help="(deprecated) --privacy public ile ayni")
+    p.add_argument("--privacy", choices=["private", "public", "unlisted"], default=None)
+    p.add_argument("--auto-public-after", type=int, default=0,
+                   help="Saniye sonra video private->public'e cevrilir (privacy public degilse)")
     args = p.parse_args()
 
     if args.auth:
@@ -373,8 +388,17 @@ def main():
         print("[auth] Token kaydedildi:", TOKEN_JSON)
         return
 
-    privacy = "public" if args.public else "private"
-    run_pipeline(skip_upload=args.no_upload, privacy=privacy)
+    if args.privacy:
+        privacy = args.privacy
+    elif args.public:
+        privacy = "public"
+    else:
+        privacy = "private"
+    run_pipeline(
+        skip_upload=args.no_upload,
+        privacy=privacy,
+        auto_public_after=args.auto_public_after,
+    )
 
 
 if __name__ == "__main__":

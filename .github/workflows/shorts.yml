@@ -41,11 +41,11 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          PRIVACY="${{ github.event.inputs.privacy || 'public' }}"
-          if [ "$PRIVACY" = "public" ]; then
-            python shorts_automation.py --public
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            python shorts_automation.py --privacy private --auto-public-after 600
           else
-            python shorts_automation.py
+            PRIVACY="${{ github.event.inputs.privacy || 'public' }}"
+            python shorts_automation.py --privacy "$PRIVACY"
           fi
 
       - name: Upload artifacts on failure

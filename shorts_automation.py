@@ -411,12 +411,18 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
 
 
 # --------- 4. Render final video with ffmpeg ---------
-def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path):
+def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
+                 intro_thumbnail=None, intro_duration=1.2):
     """Concat 1..N portrait clips with crossfade transitions, overlay subs, mux audio.
     Subs are a real .ass file (V4+ Styles + per-word color overrides) so the yellow
     accent words actually render — SRT swallows ASS override tags but .ass keeps them.
     Each scene runs for ~total/N seconds (clamped to 5..15). xfade chain produces
-    final length = sum(per_clip) - (N-1)*xfade_dur ≈ audio_duration + 0.5."""
+    bg-chain length = sum(per_clip) - (N-1)*xfade_dur ≈ audio_duration + 0.5.
+
+    If `intro_thumbnail` is given, prepend it as a silent intro of `intro_duration`
+    seconds: viewers see the hook text while scrolling. Audio is delayed by
+    intro_duration via adelay; the caller must also have built the .ass with
+    matching time_offset so subs stay synced with voice."""
     if isinstance(bg_clips, (str, Path)):
         bg_clips = [Path(bg_clips)]
     bg_clips = [Path(c) for c in bg_clips]
@@ -424,35 +430,43 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path):
     if n == 0:
         raise RuntimeError("render_video: hicbir klip verilmedi")
 
+    has_intro = intro_thumbnail is not None and Path(intro_thumbnail).exists()
+    intro_dur = intro_duration if has_intro else 0.0
+
     xfade_dur = 0.4
-    total_video_dur = audio_duration + 0.5
-    # Try requested N; if per-clip < 5s, drop down to fewer scenes.
+    bg_chain_dur = audio_duration + 0.5
     while n > 1:
-        per_clip = (total_video_dur + (n - 1) * xfade_dur) / n
+        per_clip = (bg_chain_dur + (n - 1) * xfade_dur) / n
         if per_clip >= 5.0:
             break
         n -= 1
     bg_clips = bg_clips[:n]
-    per_clip = (total_video_dur + (n - 1) * xfade_dur) / n
-    per_clip = min(per_clip, 15.0) if n > 1 else total_video_dur
+    per_clip = (bg_chain_dur + (n - 1) * xfade_dur) / n
+    per_clip = min(per_clip, 15.0) if n > 1 else bg_chain_dur
 
     ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
 
     inputs = []
     for clip in bg_clips:
         inputs.extend(["-stream_loop", "-1", "-i", str(clip)])
+    if has_intro:
+        inputs.extend(["-loop", "1", "-framerate", "30", "-t", f"{intro_dur:.3f}",
+                       "-i", str(intro_thumbnail)])
+        intro_input_idx = n
+        audio_input_idx = n + 1
+    else:
+        audio_input_idx = n
     inputs.extend(["-i", str(audio_path)])
-    audio_input_idx = n
 
     fc_parts = []
     for i in range(n):
         fc_parts.append(
             f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
             f"crop=1080:1920,trim=duration={per_clip:.3f},setpts=PTS-STARTPTS,"
-            f"format=yuv420p[v{i}]"
+            f"format=yuv420p,fps=30,setsar=1[v{i}]"
         )
     if n == 1:
-        chained_label = "[v0]"
+        bg_label = "[v0]"
     else:
         prev = "[v0]"
         for i in range(1, n):
@@ -463,14 +477,28 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path):
                 f":offset={offset:.3f}{label}"
             )
             prev = label
-        chained_label = prev
+        bg_label = prev
 
-    fc_parts.append(f"{chained_label}subtitles='{ass_str}'[outv]")
+    if has_intro:
+        fc_parts.append(
+            f"[{intro_input_idx}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920,trim=duration={intro_dur:.3f},setpts=PTS-STARTPTS,"
+            f"format=yuv420p,fps=30,setsar=1[intro]"
+        )
+        fc_parts.append(f"[intro]{bg_label}concat=n=2:v=1:a=0[bgv]")
+        fc_parts.append(f"[bgv]subtitles='{ass_str}'[outv]")
+        fc_parts.append(
+            f"[{audio_input_idx}:a]adelay={int(intro_dur * 1000)}|{int(intro_dur * 1000)}[outa]"
+        )
+        audio_map = "[outa]"
+    else:
+        fc_parts.append(f"{bg_label}subtitles='{ass_str}'[outv]")
+        audio_map = f"{audio_input_idx}:a"
     fc = ";".join(fc_parts)
 
     cmd = ["ffmpeg", "-y"] + inputs + [
         "-filter_complex", fc,
-        "-map", "[outv]", "-map", f"{audio_input_idx}:a",
+        "-map", "[outv]", "-map", audio_map,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
@@ -478,7 +506,8 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path):
         "-r", "30",
         str(output_path),
     ]
-    print(f"[render] {n} klip xfade chain, per-clip={per_clip:.1f}s, FFmpeg calisiyor...")
+    intro_msg = f", +{intro_dur}s thumbnail intro" if has_intro else ""
+    print(f"[render] {n} klip xfade chain, per-clip={per_clip:.1f}s{intro_msg}, FFmpeg calisiyor...")
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(res.stderr[-2000:])
@@ -592,8 +621,11 @@ def _next_publish_tr_slot(slots_str, now_utc=None):
 
 
 # --------- Main pipeline ---------
+INTRO_DURATION = 1.2  # thumbnail held as silent intro frame at the start of the short
+
+
 def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
-                 publish_at_tr_slots=None):
+                 publish_at_tr_slots=None, upload_thumbnail=False):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir = OUTPUT_DIR / ts
     workdir.mkdir(exist_ok=True)
@@ -604,7 +636,10 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
 
     audio_path = workdir / "voice.mp3"
     subs_path = workdir / "subs.ass"
-    duration = generate_voice(meta["script"], audio_path, subs_path)
+    # Subs are shifted by the intro duration so they stay in sync with the
+    # voice (which is also delayed by INTRO_DURATION via adelay in render).
+    duration = generate_voice(meta["script"], audio_path, subs_path,
+                              time_offset=INTRO_DURATION)
 
     visual_keywords = meta.get("visual_keywords") or [meta["keyword"]]
     clips_meta = fetch_pexels_clips(
@@ -625,7 +660,8 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         thumb_path = None
 
     out_path = workdir / "short.mp4"
-    render_video(clip_paths, audio_path, subs_path, duration, out_path)
+    render_video(clip_paths, audio_path, subs_path, duration, out_path,
+                 intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION)
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")
@@ -645,7 +681,7 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         meta["tags"],
         privacy=privacy,
         publish_at=publish_at,
-        thumbnail_path=thumb_path,
+        thumbnail_path=thumb_path if upload_thumbnail else None,
     )
     print(f"[main] Tamam. Video ID: {video_id}")
     return out_path
@@ -662,6 +698,12 @@ def main():
     p.add_argument("--publish-at-tr", default=None,
                    help="Virgulle ayrilmis TR saatleri (orn: '19:00,01:00'). "
                         "En yakin gelecek slotu publishAt olarak kullanir, GitHub gecikmesinden bagimsiz.")
+    # Custom thumbnail YT upload is OFF by default — Shorts ignores the custom thumbnail
+    # in feed/grid, so the 1.2s in-video intro frame from thumbnail.png does the job.
+    # Pass --upload-thumbnail to opt in (e.g. for non-Shorts uploads).
+    p.add_argument("--upload-thumbnail", action="store_true",
+                   help="YT'ye custom thumbnail yukle (varsayilan: kapali, video icindeki "
+                        "1.2sn intro yetiyor cunku Shorts custom thumbnail'i feed'de gostermiyor)")
     args = p.parse_args()
 
     if args.auth:
@@ -680,6 +722,7 @@ def main():
         privacy=privacy,
         auto_public_after=args.auto_public_after,
         publish_at_tr_slots=args.publish_at_tr,
+        upload_thumbnail=args.upload_thumbnail,
     )
 
 

@@ -1,0 +1,20 @@
+# Hassas dosyalar - ASLA push etme
+.env
+credentials.json
+token.json
+
+# Çıktı ve cache
+outputs/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local scratch / test artifacts (not for git)
+test_voice*.mp3
+test_subs.srt
+sample_thumbnails/
+
+# OS
+.DS_Store
+Thumbs.db

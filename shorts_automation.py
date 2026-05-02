@@ -62,7 +62,7 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16
 TARGET_DURATION_RANGE = (28, 55)  # seconds
-VOICE = "en-US-GuyNeural"  # high-energy narrator
+VOICE = "en-US-AndrewMultilingualNeural"  # most expressive storyteller voice
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
@@ -107,6 +107,9 @@ Script rules (MANDATORY):
 - Every 5-7 seconds, drop a mini cliffhanger or curiosity spike ("but here is the twist...",
   "and this is where it gets dark...", "wait until you hear what they did next...").
 - Sentences must be SHORT, SHARP, PUNCHY. Spoken English, conversational, no fluff.
+- Write WORDS YOU WANT SHOUTED in ALL CAPS (the TTS narrator uses caps as an emphasis cue,
+  ride the rhythm — 1-2 caps words per sentence, never a whole sentence in caps).
+- The opening hook MUST end with "!" or "?" (forces the voice pitch to rise sharply).
 - No slow intros, no "in this video", no throat-clearing. Start mid-action.
 - Use a real research finding or named effect when possible (Asch conformity, Dunning-Kruger,
   Zeigarnik effect, mere exposure, loss aversion, spotlight effect, etc.).
@@ -144,7 +147,7 @@ Output JSON only, nothing else."""
 # --------- 2. Generate TTS audio with subtitles ---------
 async def _generate_voice_async(text, audio_path, srt_path):
     sub_maker = SubMaker()
-    communicate = edge_tts.Communicate(text, VOICE, rate="+10%", boundary="WordBoundary")
+    communicate = edge_tts.Communicate(text, VOICE, rate="+8%", boundary="WordBoundary")
     with open(audio_path, "wb") as audio_file:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":

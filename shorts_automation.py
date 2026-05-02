@@ -468,8 +468,31 @@ def upload_to_youtube(video_path, title, description, tags, privacy="private",
     return video_id
 
 
+def _next_publish_tr_slot(slots_str, now_utc=None):
+    """Given comma-separated TR times like '19:00,01:00', return the next
+    upcoming occurrence as ISO UTC string for YouTube publishAt.
+    `now_utc` is injectable for testing."""
+    from datetime import datetime, timedelta, timezone
+    tr_offset = timedelta(hours=3)  # TR is UTC+3 fixed (no DST)
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    now_tr = (now_utc + tr_offset).replace(tzinfo=None)
+    candidates = []
+    for s in slots_str.split(","):
+        hh, mm = (int(x) for x in s.strip().split(":"))
+        for day_off in (-1, 0, 1):
+            cand_tr = now_tr.replace(hour=hh, minute=mm, second=0, microsecond=0) \
+                      + timedelta(days=day_off)
+            candidates.append(cand_tr)
+    future = [c for c in candidates if c > now_tr + timedelta(seconds=60)]
+    target_tr = min(future)
+    target_utc = target_tr - tr_offset
+    return target_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 # --------- Main pipeline ---------
-def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0):
+def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
+                 publish_at_tr_slots=None):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir = OUTPUT_DIR / ts
     workdir.mkdir(exist_ok=True)
@@ -500,7 +523,10 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0):
         print(f"[main] Yukleme atlandi. Video: {out_path}")
         return out_path
     publish_at = None
-    if auto_public_after > 0 and privacy != "public":
+    if publish_at_tr_slots and privacy != "public":
+        publish_at = _next_publish_tr_slot(publish_at_tr_slots)
+        print(f"[main] publishAt (next TR slot): {publish_at}")
+    elif auto_public_after > 0 and privacy != "public":
         from datetime import timedelta, timezone
         dt = datetime.now(timezone.utc) + timedelta(seconds=auto_public_after)
         publish_at = dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -525,6 +551,9 @@ def main():
     p.add_argument("--privacy", choices=["private", "public", "unlisted"], default=None)
     p.add_argument("--auto-public-after", type=int, default=0,
                    help="Saniye sonra video private->public'e cevrilir (privacy public degilse)")
+    p.add_argument("--publish-at-tr", default=None,
+                   help="Virgulle ayrilmis TR saatleri (orn: '19:00,01:00'). "
+                        "En yakin gelecek slotu publishAt olarak kullanir, GitHub gecikmesinden bagimsiz.")
     args = p.parse_args()
 
     if args.auth:
@@ -542,6 +571,7 @@ def main():
         skip_upload=args.no_upload,
         privacy=privacy,
         auto_public_after=args.auto_public_after,
+        publish_at_tr_slots=args.publish_at_tr,
     )
 
 

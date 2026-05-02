@@ -14,8 +14,11 @@ on:
         default: false
 
   schedule:
-    # 16:00 + 22:00 UTC = TR 19:00 + 01:00 / US East 12:00 + 18:00 (2 videos/day)
-    - cron: "0 16,22 * * *"
+    # Fire 25 min early (15:35 + 21:35 UTC) to compensate for GitHub Actions
+    # scheduling delay (5-30 min). The script computes publishAt as the next
+    # TR 19:00 / 01:00 slot, so videos go public exactly on time regardless
+    # of when this run actually starts.
+    - cron: "35 15,21 * * *"
 
 jobs:
   generate-and-upload:
@@ -47,7 +50,7 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            python shorts_automation.py --privacy private --auto-public-after 600
+            python shorts_automation.py --privacy private --publish-at-tr "19:00,01:00"
           elif [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             python shorts_automation.py --no-upload
           else

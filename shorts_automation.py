@@ -150,7 +150,65 @@ Output JSON only, nothing else."""
 
 
 # --------- 2. Generate TTS audio with subtitles ---------
-async def _generate_voice_async(text, audio_path, srt_path):
+ASS_HEADER = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Impact,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,40,40,180,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+
+def _ass_time(s):
+    """ASS time: H:MM:SS.cs (centiseconds, single-digit hour)."""
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    sec = s - h * 3600 - m * 60
+    cs = int(round((sec - int(sec)) * 100))
+    if cs == 100:
+        cs = 0
+        sec += 1
+    return f"{h}:{m:02d}:{int(sec):02d}.{cs:02d}"
+
+
+def _build_ass(cues, time_offset, ass_path):
+    """Write libass-compatible .ass file. Every 3rd word (the 2nd in each group of 3)
+    is yellow via inline {\\c} override; the rest inherit Default white. ffmpeg's
+    subtitles= filter renders these overrides correctly (SRT swallows them)."""
+    yellow = r"{\c&H0000D7FF&}"  # ASS BGR -> golden yellow
+    reset = r"{\r}"
+    lines = [ASS_HEADER]
+    group_size = 3
+    word_idx = 0
+    for i in range(0, len(cues), group_size):
+        group = cues[i:i + group_size]
+        if not group:
+            continue
+        start_s = group[0].start.total_seconds() + time_offset
+        end_s = group[-1].end.total_seconds() + time_offset
+        parts = []
+        for c in group:
+            word = c.content.upper()
+            if word_idx % 3 == 1:
+                parts.append(f"{yellow}{word}{reset}")
+            else:
+                parts.append(word)
+            word_idx += 1
+        text_chunk = " ".join(parts)
+        lines.append(
+            f"Dialogue: 0,{_ass_time(start_s)},{_ass_time(end_s)},Default,,0,0,0,,{text_chunk}"
+        )
+    Path(ass_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+async def _generate_voice_async(text, audio_path, ass_path, time_offset=0.0):
     sub_maker = SubMaker()
     communicate = edge_tts.Communicate(text, VOICE, rate="+8%", boundary="WordBoundary")
     with open(audio_path, "wb") as audio_file:
@@ -159,41 +217,11 @@ async def _generate_voice_async(text, audio_path, srt_path):
                 audio_file.write(chunk["data"])
             elif chunk["type"] == "WordBoundary":
                 sub_maker.feed(chunk)
-
-    # Generate SRT subs with alternating white/yellow word colors (ASS override tags)
-    srt_lines = []
-    cues = sub_maker.cues
-    group_size = 3
-    idx = 1
-    word_idx = 0
-    yellow = r"{\c&H0000D7FF&}"
-    white = r"{\c&H00FFFFFF&}"
-    for i in range(0, len(cues), group_size):
-        group = cues[i:i + group_size]
-        if not group:
-            continue
-        start_s = group[0].start.total_seconds()
-        end_s = group[-1].end.total_seconds()
-        parts = []
-        for c in group:
-            color = yellow if word_idx % 3 == 1 else white
-            parts.append(f"{color}{c.content.upper()}")
-            word_idx += 1
-        text_chunk = " ".join(parts)
-        srt_lines.append(f"{idx}\n{_fmt_time(start_s)} --> {_fmt_time(end_s)}\n{text_chunk}\n")
-        idx += 1
-    Path(srt_path).write_text("\n".join(srt_lines), encoding="utf-8")
+    _build_ass(sub_maker.cues, time_offset, ass_path)
 
 
-def _fmt_time(s):
-    h = int(s // 3600)
-    m = int((s % 3600) // 60)
-    sec = s % 60
-    return f"{h:02d}:{m:02d}:{sec:06.3f}".replace(".", ",")
-
-
-def generate_voice(text, audio_path, srt_path):
-    asyncio.run(_generate_voice_async(text, audio_path, srt_path))
+def generate_voice(text, audio_path, ass_path, time_offset=0.0):
+    asyncio.run(_generate_voice_async(text, audio_path, ass_path, time_offset))
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
@@ -383,8 +411,10 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
 
 
 # --------- 4. Render final video with ffmpeg ---------
-def render_video(bg_clips, audio_path, srt_path, audio_duration, output_path):
+def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path):
     """Concat 1..N portrait clips with crossfade transitions, overlay subs, mux audio.
+    Subs are a real .ass file (V4+ Styles + per-word color overrides) so the yellow
+    accent words actually render — SRT swallows ASS override tags but .ass keeps them.
     Each scene runs for ~total/N seconds (clamped to 5..15). xfade chain produces
     final length = sum(per_clip) - (N-1)*xfade_dur ≈ audio_duration + 0.5."""
     if isinstance(bg_clips, (str, Path)):
@@ -406,7 +436,7 @@ def render_video(bg_clips, audio_path, srt_path, audio_duration, output_path):
     per_clip = (total_video_dur + (n - 1) * xfade_dur) / n
     per_clip = min(per_clip, 15.0) if n > 1 else total_video_dur
 
-    srt_str = str(srt_path).replace("\\", "/").replace(":", "\\:")
+    ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
 
     inputs = []
     for clip in bg_clips:
@@ -435,12 +465,7 @@ def render_video(bg_clips, audio_path, srt_path, audio_duration, output_path):
             prev = label
         chained_label = prev
 
-    fc_parts.append(
-        f"{chained_label}subtitles='{srt_str}':force_style='"
-        f"FontName=Impact,FontSize=11,PrimaryColour=&H00FFFFFF,"
-        f"OutlineColour=&H00000000,Outline=3,Shadow=0,Alignment=2,MarginV=80,Bold=1'"
-        f"[outv]"
-    )
+    fc_parts.append(f"{chained_label}subtitles='{ass_str}'[outv]")
     fc = ";".join(fc_parts)
 
     cmd = ["ffmpeg", "-y"] + inputs + [
@@ -578,8 +603,8 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
     (workdir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
     audio_path = workdir / "voice.mp3"
-    srt_path = workdir / "subs.srt"
-    duration = generate_voice(meta["script"], audio_path, srt_path)
+    subs_path = workdir / "subs.ass"
+    duration = generate_voice(meta["script"], audio_path, subs_path)
 
     visual_keywords = meta.get("visual_keywords") or [meta["keyword"]]
     clips_meta = fetch_pexels_clips(
@@ -600,7 +625,7 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         thumb_path = None
 
     out_path = workdir / "short.mp4"
-    render_video(clip_paths, audio_path, srt_path, duration, out_path)
+    render_video(clip_paths, audio_path, subs_path, duration, out_path)
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")

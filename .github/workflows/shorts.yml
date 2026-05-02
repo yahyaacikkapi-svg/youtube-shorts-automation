@@ -14,11 +14,11 @@ on:
         default: false
 
   schedule:
-    # Fire 25 min early (15:35 + 21:35 UTC) to compensate for GitHub Actions
-    # scheduling delay (5-30 min). The script computes publishAt as the next
-    # TR 19:00 / 01:00 slot, so videos go public exactly on time regardless
-    # of when this run actually starts.
-    - cron: "35 15,21 * * *"
+    # Fire 18 min before target slot (15:42 + 21:42 UTC). With ~3 min pipeline
+    # runtime, upload finishes ~15 min before public time, giving the desired
+    # private-then-public-15min window. publishAt is locked to TR 19:00/01:00,
+    # so videos still go public exactly on time.
+    - cron: "42 15,21 * * *"
 
 jobs:
   generate-and-upload:

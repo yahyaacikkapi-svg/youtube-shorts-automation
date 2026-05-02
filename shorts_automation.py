@@ -37,10 +37,12 @@ try:
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
+    from googleapiclient.errors import HttpError
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
 except ImportError as e:
     print(f"[hata] Eksik paket: {e.name}")
     print("Kurulum: pip install google-generativeai edge-tts google-auth google-auth-oauthlib "
-          "google-api-python-client python-dotenv requests")
+          "google-api-python-client python-dotenv requests Pillow")
     sys.exit(1)
 
 
@@ -51,6 +53,7 @@ CREDENTIALS_JSON = ROOT / "credentials.json"
 TOKEN_JSON = ROOT / "token.json"
 OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+BRAND_DIR = ROOT / "brand"
 
 load_dotenv(ENV_PATH)
 
@@ -118,6 +121,9 @@ Return ONLY valid JSON with these keys:
 - "tags": JSON array of 12 SEO tags (mix of psychology, mind, brain, behavior terms)
 - "keyword": ONE word for stock video search - pick something visually evocative that
   fits the topic mood (e.g. "brain", "crowd", "mirror", "eyes", "city", "abstract")
+- "thumbnail_text": MAX 4 WORDS, ALL CAPS, the punchiest version of the hook.
+  Examples: "YOUR BRAIN LIES", "THE 3-SECOND TRICK", "WHY YOU CAN'T STOP", "STOP DOING THIS".
+  No emojis, no punctuation except hyphen. Must be screen-readable at thumbnail scale.
 
 Output JSON only, nothing else."""
 
@@ -234,6 +240,119 @@ def download_file(url, dest):
     print(f"[download] {dest.name}")
 
 
+# --------- 4a. Generate thumbnail (1080x1920, branded) ---------
+THUMB_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/impact.ttf",
+    "C:/Windows/Fonts/ariblk.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/Library/Fonts/Arial Black.ttf",
+]
+
+
+def _pick_thumb_font(size):
+    for path in THUMB_FONT_CANDIDATES:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def _wrap_lines(text, font, max_width, draw):
+    words = text.split()
+    lines, current = [], ""
+    for w in words:
+        candidate = (current + " " + w).strip()
+        bbox = draw.textbbox((0, 0), candidate, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines
+
+
+def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
+    """1080x1920 thumbnail: blurred frame + chromatic aberration text + B logo."""
+    workdir = Path(out_path).parent
+    frame_path = workdir / "_thumb_frame.png"
+    cmd = ["ffmpeg", "-y", "-i", str(bg_video_path), "-vframes", "1",
+           "-q:v", "2", str(frame_path)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0 or not frame_path.exists():
+        print(res.stderr[-1000:])
+        raise RuntimeError("Thumbnail icin frame cikarilamadi")
+
+    img = Image.open(frame_path).convert("RGB")
+    w, h = img.size
+    target_ratio = VIDEO_W / VIDEO_H
+    src_ratio = w / h
+    if src_ratio > target_ratio:
+        new_w = int(h * target_ratio)
+        left = (w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, h))
+    else:
+        new_h = int(w / target_ratio)
+        top = (h - new_h) // 2
+        img = img.crop((0, top, w, top + new_h))
+    img = img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+    img = img.filter(ImageFilter.GaussianBlur(radius=10))
+    dark = Image.new("RGB", img.size, (0, 0, 0))
+    img = Image.blend(img, dark, 0.45)
+    img = img.convert("RGBA")
+
+    text = (thumbnail_text or "").upper().strip() or "BRAIN STATIC"
+    draw = ImageDraw.Draw(img)
+    max_text_width = VIDEO_W - 160
+    font_size = 220
+    while font_size > 80:
+        font = _pick_thumb_font(font_size)
+        lines = _wrap_lines(text, font, max_text_width, draw)
+        line_h = font.getbbox("Ay")[3] - font.getbbox("Ay")[1]
+        total_h = len(lines) * (line_h + 24)
+        widest = max((draw.textbbox((0, 0), ln, font=font)[2] for ln in lines), default=0)
+        if widest <= max_text_width and total_h <= VIDEO_H * 0.55:
+            break
+        font_size -= 12
+    font = _pick_thumb_font(font_size)
+    lines = _wrap_lines(text, font, max_text_width, draw)
+    line_h = font.getbbox("Ay")[3] - font.getbbox("Ay")[1]
+    total_h = len(lines) * (line_h + 24)
+    y = (VIDEO_H - total_h) // 2
+
+    cyan = (0, 229, 255, 220)
+    magenta = (255, 0, 128, 220)
+    white = (255, 255, 255, 255)
+    shift = max(4, font_size // 28)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_w = bbox[2] - bbox[0]
+        x = (VIDEO_W - text_w) // 2
+        draw.text((x - shift, y), line, font=font, fill=cyan)
+        draw.text((x + shift, y), line, font=font, fill=magenta)
+        draw.text((x, y + 4), line, font=font, fill=(0, 0, 0, 180))
+        draw.text((x, y), line, font=font, fill=white)
+        y += line_h + 24
+
+    logo_path = BRAND_DIR / "profile.png"
+    if logo_path.exists():
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            logo.thumbnail((150, 150), Image.LANCZOS)
+            img.paste(logo, (60, VIDEO_H - logo.size[1] - 60), logo)
+        except Exception as e:
+            print(f"[thumb] logo eklenemedi: {e}")
+
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
+    try:
+        frame_path.unlink()
+    except OSError:
+        pass
+    print(f"[thumb] Hazir -> {out_path.name} ({font_size}px, {len(lines)} line)")
+
+
 # --------- 4. Render final video with ffmpeg ---------
 def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_path):
     srt_str = str(srt_path).replace("\\", "/").replace(":", "\\:")
@@ -307,7 +426,8 @@ def get_youtube_creds():
     return creds
 
 
-def upload_to_youtube(video_path, title, description, tags, privacy="private", publish_at=None):
+def upload_to_youtube(video_path, title, description, tags, privacy="private",
+                      publish_at=None, thumbnail_path=None):
     creds = get_youtube_creds()
     youtube = build("youtube", "v3", credentials=creds)
     status = {
@@ -330,10 +450,22 @@ def upload_to_youtube(video_path, title, description, tags, privacy="private", p
     response = None
     while response is None:
         s, response = request.next_chunk()
-    print(f"[upload] Yuklendi: https://youtube.com/watch?v={response['id']}")
+    video_id = response["id"]
+    print(f"[upload] Yuklendi: https://youtube.com/watch?v={video_id}")
     if publish_at:
         print(f"[upload] Public olacak: {publish_at}")
-    return response["id"]
+
+    if thumbnail_path and Path(thumbnail_path).exists():
+        try:
+            youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
+            ).execute()
+            print(f"[upload] Thumbnail set")
+        except HttpError as e:
+            print(f"[upload] Thumbnail atlandi (kanal henuz custom thumbnail yetkisiz olabilir): {e}")
+
+    return video_id
 
 
 # --------- Main pipeline ---------
@@ -354,6 +486,13 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0):
     bg_path = workdir / "bg.mp4"
     download_file(bg_url, bg_path)
 
+    thumb_path = workdir / "thumbnail.png"
+    try:
+        generate_thumbnail(bg_path, meta.get("thumbnail_text", ""), thumb_path)
+    except Exception as e:
+        print(f"[thumb] uretilemedi, atlanacak: {e}")
+        thumb_path = None
+
     out_path = workdir / "short.mp4"
     render_video(bg_path, audio_path, srt_path, duration, out_path)
 
@@ -372,6 +511,7 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0):
         meta["tags"],
         privacy=privacy,
         publish_at=publish_at,
+        thumbnail_path=thumb_path,
     )
     print(f"[main] Tamam. Video ID: {video_id}")
     return out_path

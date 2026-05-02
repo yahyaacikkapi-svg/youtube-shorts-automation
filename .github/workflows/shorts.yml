@@ -7,6 +7,11 @@ on:
         description: "Video privacy (private/unlisted/public)"
         required: false
         default: "public"
+      skip_upload:
+        description: "Skip YouTube upload (test only, downloads outputs as artifact)"
+        required: false
+        type: boolean
+        default: false
 
   schedule:
     # 16:00 + 22:00 UTC = TR 19:00 + 01:00 / US East 12:00 + 18:00 (2 videos/day)
@@ -43,15 +48,18 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python shorts_automation.py --privacy private --auto-public-after 600
+          elif [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
+            python shorts_automation.py --no-upload
           else
             PRIVACY="${{ github.event.inputs.privacy || 'public' }}"
             python shorts_automation.py --privacy "$PRIVACY"
           fi
 
-      - name: Upload artifacts on failure
-        if: failure()
+      - name: Upload outputs as artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-output
+          name: outputs-${{ github.run_id }}
           path: outputs/
           retention-days: 3
+          if-no-files-found: ignore

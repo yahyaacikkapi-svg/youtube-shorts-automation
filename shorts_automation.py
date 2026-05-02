@@ -122,8 +122,13 @@ Return ONLY valid JSON with these keys:
 - "title": YouTube Shorts title, max 70 chars, curiosity-driven, ends with #Shorts
 - "description": 2 short sentences + 8 hashtags (include #psychology #mindset)
 - "tags": JSON array of 12 SEO tags (mix of psychology, mind, brain, behavior terms)
-- "keyword": ONE word for stock video search - pick something visually evocative that
-  fits the topic mood (e.g. "brain", "crowd", "mirror", "eyes", "city", "abstract")
+- "visual_keywords": JSON array of EXACTLY 4 specific, cinematic stock-footage search
+  terms tied to the EXACT script content. Each entry = a different scene, different
+  mood, but all clearly on-topic. Use 2-4 word phrases, no single words.
+  Example for a memory script: ["empty hospital corridor", "old photographs scattered",
+  "rain on window at night", "elderly hand writing letter"]
+- "keyword": fallback ONE word for stock video search if a visual_keyword returns
+  nothing (e.g. "brain", "crowd", "mirror", "eyes", "city", "abstract")
 - "thumbnail_text": MAX 4 WORDS, ALL CAPS, the punchiest version of the hook.
   Examples: "YOUR BRAIN LIES", "THE 3-SECOND TRICK", "WHY YOU CAN'T STOP", "STOP DOING THIS".
   No emojis, no punctuation except hyphen. Must be screen-readable at thumbnail scale.
@@ -200,38 +205,59 @@ def generate_voice(text, audio_path, srt_path):
 
 
 # --------- 3. Fetch portrait stock videos from Pexels ---------
-def fetch_pexels_video(keyword, min_duration_s):
+def _pexels_search(headers, query, min_dur):
+    """Returns (id, link, duration) tuple for the best portrait MP4 in `query`,
+    or None if no usable result. sort=popular + size=large for cinematic clips."""
+    params = {
+        "query": query, "per_page": 15, "orientation": "portrait",
+        "size": "large", "sort": "popular",
+    }
+    r = requests.get("https://api.pexels.com/videos/search",
+                     headers=headers, params=params, timeout=30)
+    r.raise_for_status()
+    for v in r.json().get("videos", []):
+        if v["duration"] < min_dur:
+            continue
+        for f in v["video_files"]:
+            if f.get("file_type") == "video/mp4" and f.get("width", 0) >= 720:
+                return v["id"], f["link"], v["duration"]
+    return None
+
+
+def fetch_pexels_clips(visual_keywords, fallback_keyword, n_clips=4,
+                       min_duration_per_clip=5):
+    """Returns list of (url, duration) tuples — one cinematic portrait clip per
+    visual_keyword. Falls back to `fallback_keyword` for any query that returns
+    nothing. De-duplicates by Pexels video id so no clip repeats."""
     if not PEXELS_API_KEY:
         raise RuntimeError("PEXELS_API_KEY .env'de yok")
     headers = {"Authorization": PEXELS_API_KEY}
-    url = "https://api.pexels.com/videos/search"
-    aesthetic_query = f"{keyword} aesthetic cinematic"
-    params = {"query": aesthetic_query, "per_page": 15, "orientation": "portrait", "size": "medium"}
-    r = requests.get(url, headers=headers, params=params, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-    if not data.get("videos"):
-        print(f"[pexels] '{aesthetic_query}' sonuc yok, '{keyword}' deneniyor")
-        params["query"] = keyword
-        r = requests.get(url, headers=headers, params=params, timeout=30)
-        data = r.json()
-    if not data.get("videos"):
-        print(f"[pexels] sonuc yok, 'aesthetic abstract' deneniyor")
-        params["query"] = "aesthetic abstract"
-        r = requests.get(url, headers=headers, params=params, timeout=30)
-        data = r.json()
 
-    for v in data["videos"]:
-        if v["duration"] >= min_duration_s:
-            for f in v["video_files"]:
-                if f.get("file_type") == "video/mp4" and f.get("width", 0) >= 720:
-                    print(f"[pexels] {f['width']}x{f['height']}, {v['duration']}s")
-                    return f["link"]
-    longest = max(data["videos"], key=lambda v: v["duration"])
-    for f in longest["video_files"]:
-        if f.get("file_type") == "video/mp4":
-            return f["link"]
-    raise RuntimeError("Pexels'tan uygun video bulunamadi")
+    queries = list(visual_keywords)[:n_clips]
+    while len(queries) < n_clips:
+        queries.append(fallback_keyword)
+
+    seen_ids = set()
+    results = []
+    for q in queries:
+        attempts = [q, f"{q} cinematic", fallback_keyword,
+                    f"{fallback_keyword} aesthetic cinematic", "aesthetic abstract"]
+        chosen = None
+        for attempt in attempts:
+            hit = _pexels_search(headers, attempt, min_duration_per_clip)
+            if hit and hit[0] not in seen_ids:
+                chosen = hit
+                break
+        if chosen:
+            seen_ids.add(chosen[0])
+            results.append((chosen[1], chosen[2]))
+            print(f"[pexels] '{q}' -> id={chosen[0]} ({chosen[2]}s)")
+        else:
+            print(f"[pexels] '{q}' icin uygun klip yok, atlaniyor")
+
+    if not results:
+        raise RuntimeError("Pexels'tan hicbir uygun klip alinamadi")
+    return results
 
 
 def download_file(url, dest):
@@ -357,22 +383,69 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
 
 
 # --------- 4. Render final video with ffmpeg ---------
-def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_path):
+def render_video(bg_clips, audio_path, srt_path, audio_duration, output_path):
+    """Concat 1..N portrait clips with crossfade transitions, overlay subs, mux audio.
+    Each scene runs for ~total/N seconds (clamped to 5..15). xfade chain produces
+    final length = sum(per_clip) - (N-1)*xfade_dur ≈ audio_duration + 0.5."""
+    if isinstance(bg_clips, (str, Path)):
+        bg_clips = [Path(bg_clips)]
+    bg_clips = [Path(c) for c in bg_clips]
+    n = len(bg_clips)
+    if n == 0:
+        raise RuntimeError("render_video: hicbir klip verilmedi")
+
+    xfade_dur = 0.4
+    total_video_dur = audio_duration + 0.5
+    # Try requested N; if per-clip < 5s, drop down to fewer scenes.
+    while n > 1:
+        per_clip = (total_video_dur + (n - 1) * xfade_dur) / n
+        if per_clip >= 5.0:
+            break
+        n -= 1
+    bg_clips = bg_clips[:n]
+    per_clip = (total_video_dur + (n - 1) * xfade_dur) / n
+    per_clip = min(per_clip, 15.0) if n > 1 else total_video_dur
+
     srt_str = str(srt_path).replace("\\", "/").replace(":", "\\:")
-    vf = (
-        f"scale=1080:1920:force_original_aspect_ratio=increase,"
-        f"crop=1080:1920,"
-        f"subtitles='{srt_str}':force_style='"
+
+    inputs = []
+    for clip in bg_clips:
+        inputs.extend(["-stream_loop", "-1", "-i", str(clip)])
+    inputs.extend(["-i", str(audio_path)])
+    audio_input_idx = n
+
+    fc_parts = []
+    for i in range(n):
+        fc_parts.append(
+            f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920,trim=duration={per_clip:.3f},setpts=PTS-STARTPTS,"
+            f"format=yuv420p[v{i}]"
+        )
+    if n == 1:
+        chained_label = "[v0]"
+    else:
+        prev = "[v0]"
+        for i in range(1, n):
+            offset = i * (per_clip - xfade_dur)
+            label = f"[x{i}]"
+            fc_parts.append(
+                f"{prev}[v{i}]xfade=transition=fade:duration={xfade_dur:.3f}"
+                f":offset={offset:.3f}{label}"
+            )
+            prev = label
+        chained_label = prev
+
+    fc_parts.append(
+        f"{chained_label}subtitles='{srt_str}':force_style='"
         f"FontName=Impact,FontSize=11,PrimaryColour=&H00FFFFFF,"
         f"OutlineColour=&H00000000,Outline=3,Shadow=0,Alignment=2,MarginV=80,Bold=1'"
+        f"[outv]"
     )
-    cmd = [
-        "ffmpeg", "-y",
-        "-stream_loop", "-1",
-        "-t", str(audio_duration + 0.5),
-        "-i", str(bg_video_path),
-        "-i", str(audio_path),
-        "-vf", vf,
+    fc = ";".join(fc_parts)
+
+    cmd = ["ffmpeg", "-y"] + inputs + [
+        "-filter_complex", fc,
+        "-map", "[outv]", "-map", f"{audio_input_idx}:a",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
@@ -380,7 +453,7 @@ def render_video(bg_video_path, audio_path, srt_path, audio_duration, output_pat
         "-r", "30",
         str(output_path),
     ]
-    print("[render] FFmpeg calisiyor...")
+    print(f"[render] {n} klip xfade chain, per-clip={per_clip:.1f}s, FFmpeg calisiyor...")
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(res.stderr[-2000:])
@@ -508,19 +581,26 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
     srt_path = workdir / "subs.srt"
     duration = generate_voice(meta["script"], audio_path, srt_path)
 
-    bg_url = fetch_pexels_video(meta["keyword"], min_duration_s=duration)
-    bg_path = workdir / "bg.mp4"
-    download_file(bg_url, bg_path)
+    visual_keywords = meta.get("visual_keywords") or [meta["keyword"]]
+    clips_meta = fetch_pexels_clips(
+        visual_keywords, meta["keyword"],
+        n_clips=4, min_duration_per_clip=5,
+    )
+    clip_paths = []
+    for i, (clip_url, _dur) in enumerate(clips_meta):
+        p = workdir / f"bg_{i}.mp4"
+        download_file(clip_url, p)
+        clip_paths.append(p)
 
     thumb_path = workdir / "thumbnail.png"
     try:
-        generate_thumbnail(bg_path, meta.get("thumbnail_text", ""), thumb_path)
+        generate_thumbnail(clip_paths[0], meta.get("thumbnail_text", ""), thumb_path)
     except Exception as e:
         print(f"[thumb] uretilemedi, atlanacak: {e}")
         thumb_path = None
 
     out_path = workdir / "short.mp4"
-    render_video(bg_path, audio_path, srt_path, duration, out_path)
+    render_video(clip_paths, audio_path, srt_path, duration, out_path)
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")

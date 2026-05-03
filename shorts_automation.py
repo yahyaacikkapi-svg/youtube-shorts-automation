@@ -37,7 +37,6 @@ try:
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
-    from googleapiclient.errors import HttpError
     from PIL import Image, ImageDraw, ImageFont, ImageFilter
 except ImportError as e:
     print(f"[hata] Eksik paket: {e.name}")
@@ -335,10 +334,14 @@ def _wrap_lines(text, font, max_width, draw):
     return lines
 
 
-def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
-    """1080x1920 thumbnail: blurred frame + chromatic aberration text + B logo."""
+def generate_thumbnail(bg_video_path, thumbnail_text, out_path, size=(1080, 1920)):
+    """Branded thumbnail: blurred frame + chromatic aberration text + logo.
+    Default 1080x1920 (in-video intro). Pass size=(1280, 720) for the YT custom
+    thumbnail upload — YouTube's official spec is 16:9 1280x720, and the API
+    silently rejects portrait thumbnails on some channels."""
+    target_w, target_h = size
     workdir = Path(out_path).parent
-    frame_path = workdir / "_thumb_frame.png"
+    frame_path = workdir / f"_thumb_frame_{target_w}x{target_h}.png"
     cmd = ["ffmpeg", "-y", "-i", str(bg_video_path), "-vframes", "1",
            "-q:v", "2", str(frame_path)]
     res = subprocess.run(cmd, capture_output=True, text=True)
@@ -348,7 +351,7 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
 
     img = Image.open(frame_path).convert("RGB")
     w, h = img.size
-    target_ratio = VIDEO_W / VIDEO_H
+    target_ratio = target_w / target_h
     src_ratio = w / h
     if src_ratio > target_ratio:
         new_w = int(h * target_ratio)
@@ -358,7 +361,7 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
         new_h = int(w / target_ratio)
         top = (h - new_h) // 2
         img = img.crop((0, top, w, top + new_h))
-    img = img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+    img = img.resize((target_w, target_h), Image.LANCZOS)
     img = img.filter(ImageFilter.GaussianBlur(radius=10))
     dark = Image.new("RGB", img.size, (0, 0, 0))
     img = Image.blend(img, dark, 0.45)
@@ -366,22 +369,22 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
 
     text = (thumbnail_text or "").upper().strip() or "BRAIN STATIC"
     draw = ImageDraw.Draw(img)
-    max_text_width = VIDEO_W - 160
-    font_size = 220
-    while font_size > 80:
+    max_text_width = target_w - int(target_w * 0.15)
+    font_size = max(80, min(220, target_h // 5))
+    while font_size > 60:
         font = _pick_thumb_font(font_size)
         lines = _wrap_lines(text, font, max_text_width, draw)
         line_h = font.getbbox("Ay")[3] - font.getbbox("Ay")[1]
         total_h = len(lines) * (line_h + 24)
         widest = max((draw.textbbox((0, 0), ln, font=font)[2] for ln in lines), default=0)
-        if widest <= max_text_width and total_h <= VIDEO_H * 0.55:
+        if widest <= max_text_width and total_h <= target_h * 0.55:
             break
         font_size -= 12
     font = _pick_thumb_font(font_size)
     lines = _wrap_lines(text, font, max_text_width, draw)
     line_h = font.getbbox("Ay")[3] - font.getbbox("Ay")[1]
     total_h = len(lines) * (line_h + 24)
-    y = (VIDEO_H - total_h) // 2
+    y = (target_h - total_h) // 2
 
     cyan = (0, 229, 255, 220)
     magenta = (255, 0, 128, 220)
@@ -390,7 +393,7 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         text_w = bbox[2] - bbox[0]
-        x = (VIDEO_W - text_w) // 2
+        x = (target_w - text_w) // 2
         draw.text((x - shift, y), line, font=font, fill=cyan)
         draw.text((x + shift, y), line, font=font, fill=magenta)
         draw.text((x, y + 4), line, font=font, fill=(0, 0, 0, 180))
@@ -401,8 +404,9 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
     if logo_path.exists():
         try:
             logo = Image.open(logo_path).convert("RGBA")
-            logo.thumbnail((150, 150), Image.LANCZOS)
-            img.paste(logo, (60, VIDEO_H - logo.size[1] - 60), logo)
+            logo_max = min(150, target_h // 8)
+            logo.thumbnail((logo_max, logo_max), Image.LANCZOS)
+            img.paste(logo, (60, target_h - logo.size[1] - 60), logo)
         except Exception as e:
             print(f"[thumb] logo eklenemedi: {e}")
 
@@ -411,7 +415,7 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
         frame_path.unlink()
     except OSError:
         pass
-    print(f"[thumb] Hazir -> {out_path.name} ({font_size}px, {len(lines)} line)")
+    print(f"[thumb] Hazir -> {out_path.name} {target_w}x{target_h} ({font_size}px, {len(lines)} line)")
 
 
 # --------- 4. Render final video with ffmpeg ---------
@@ -590,14 +594,11 @@ def upload_to_youtube(video_path, title, description, tags, privacy="private",
         print(f"[upload] Public olacak: {publish_at}")
 
     if thumbnail_path and Path(thumbnail_path).exists():
-        try:
-            youtube.thumbnails().set(
-                videoId=video_id,
-                media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
-            ).execute()
-            print(f"[upload] Thumbnail set")
-        except HttpError as e:
-            print(f"[upload] Thumbnail atlandi (kanal henuz custom thumbnail yetkisiz olabilir): {e}")
+        youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
+        ).execute()
+        print(f"[upload] Thumbnail set")
 
     return video_id
 
@@ -657,11 +658,18 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         clip_paths.append(p)
 
     thumb_path = workdir / "thumbnail.png"
+    yt_thumb_path = workdir / "thumbnail_yt.png"
     try:
         generate_thumbnail(clip_paths[0], meta.get("thumbnail_text", ""), thumb_path)
     except Exception as e:
         print(f"[thumb] uretilemedi, atlanacak: {e}")
         thumb_path = None
+    try:
+        generate_thumbnail(clip_paths[0], meta.get("thumbnail_text", ""),
+                           yt_thumb_path, size=(1280, 720))
+    except Exception as e:
+        print(f"[thumb] 16:9 uretilemedi, atlanacak: {e}")
+        yt_thumb_path = None
 
     out_path = workdir / "short.mp4"
     render_video(clip_paths, audio_path, subs_path, duration, out_path,
@@ -685,7 +693,7 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         meta["tags"],
         privacy=privacy,
         publish_at=publish_at,
-        thumbnail_path=thumb_path if upload_thumbnail else None,
+        thumbnail_path=yt_thumb_path if upload_thumbnail else None,
     )
     print(f"[main] Tamam. Video ID: {video_id}")
     return out_path

@@ -55,7 +55,7 @@ jobs:
             python shorts_automation.py --no-upload
           else
             PRIVACY="${{ github.event.inputs.privacy || 'public' }}"
-            python shorts_automation.py --privacy "$PRIVACY"
+            python shorts_automation.py --privacy "$PRIVACY" --upload-thumbnail
           fi
 
       - name: Upload outputs as artifact

@@ -50,7 +50,7 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            python shorts_automation.py --privacy private --publish-at-tr "19:00,01:00"
+            python shorts_automation.py --privacy private --publish-at-tr "19:00,01:00" --upload-thumbnail
           elif [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             python shorts_automation.py --no-upload
           else

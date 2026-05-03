@@ -101,15 +101,17 @@ and refuse to scroll away.
 Topic seed: {topic_seed}
 
 Script rules (MANDATORY):
-- First 2 seconds = a brutal hook that disrupts expectations. NEVER start with "Did you know".
-  Strong examples: "Your brain just lied to you.", "Most people fail this in 3 seconds.",
-  "There is a reason you cannot stop overthinking - and it is engineered."
-- Every 5-7 seconds, drop a mini cliffhanger or curiosity spike ("but here is the twist...",
-  "and this is where it gets dark...", "wait until you hear what they did next...").
-- Sentences must be SHORT, SHARP, PUNCHY. Spoken English, conversational, no fluff.
+- The opening hook MUST be ≤8 words, a single sentence. Brutal, disrupts expectations.
+  NEVER start with "Did you know". Examples: "Your brain just lied to you.",
+  "Most people fail this test.", "Your memories are fake."
+- Hook must end with "!" or "?" (forces the voice pitch to rise sharply).
+- ONE cliffhanger MAX per script ("here is the twist...", "this is where it gets dark...").
+  No more. Every extra cliffhanger costs runtime; pick the strongest beat.
+- Cut every word that does not add information. No filler ("basically", "actually", "you see",
+  "in fact", "the truth is" without payoff). Spoken English, conversational, no fluff.
+- Sentences SHORT, SHARP, PUNCHY.
 - Write WORDS YOU WANT SHOUTED in ALL CAPS (the TTS narrator uses caps as an emphasis cue,
   ride the rhythm — 1-2 caps words per sentence, never a whole sentence in caps).
-- The opening hook MUST end with "!" or "?" (forces the voice pitch to rise sharply).
 - No slow intros, no "in this video", no throat-clearing. Start mid-action.
 - Use a real research finding or named effect when possible (Asch conformity, Dunning-Kruger,
   Zeigarnik effect, mere exposure, loss aversion, spotlight effect, etc.).
@@ -117,8 +119,10 @@ Script rules (MANDATORY):
 - End with a punchline + this exact CTA: "Follow for more reasons your brain is weird."
 
 Return ONLY valid JSON with these keys:
-- "script": the spoken voiceover, 90-140 words (~35-55 seconds), hook-first, cliffhanger-paced.
-  NO emojis, NO markdown, NO sound effects in brackets, just plain spoken text.
+- "script": the spoken voiceover. STRICT length: MINIMUM 85 words, MAXIMUM 105 words.
+  This is non-negotiable — count before returning. At our +8% TTS rate this lands
+  at 28-38 seconds. Hook-first, ONE cliffhanger, zero filler words. NO emojis,
+  NO markdown, NO sound effects in brackets, just plain spoken text.
 - "title": YouTube Shorts title, max 70 chars, curiosity-driven, ends with #Shorts
 - "description": 2 short sentences + 8 hashtags (include #psychology #mindset)
 - "tags": JSON array of 12 SEO tags (mix of psychology, mind, brain, behavior terms)

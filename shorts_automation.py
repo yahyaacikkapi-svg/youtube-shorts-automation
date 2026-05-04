@@ -419,21 +419,8 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path, size=(1080, 1920
 
 
 # --------- 4. Render final video with ffmpeg ---------
-MID_FLASH_DURATION = 0.8  # seconds the branded thumbnail is held over the bg
-                          # at the video's midpoint. YouTube's auto-thumbnail
-                          # for Shorts samples frames around 50% of the video
-                          # length and picks the most "thumbnail-worthy" one
-                          # (high contrast, big text). Holding the branded
-                          # frame here forces auto-pick to land on it, so the
-                          # video shows up branded in feed/grid/share previews
-                          # even when channel-side custom-thumbnail upload is
-                          # silently rejected.
-
-
 def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
-                 intro_thumbnail=None, intro_duration=1.2,
-                 mid_flash_thumbnail=None,
-                 mid_flash_duration=MID_FLASH_DURATION):
+                 intro_thumbnail=None, intro_duration=1.2):
     """Concat 1..N portrait clips with crossfade transitions, overlay subs, mux audio.
     Subs are a real .ass file (V4+ Styles + per-word color overrides) so the yellow
     accent words actually render — SRT swallows ASS override tags but .ass keeps them.
@@ -443,12 +430,7 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
     If `intro_thumbnail` is given, prepend it as a silent intro of `intro_duration`
     seconds: viewers see the hook text while scrolling. Audio is delayed by
     intro_duration via adelay; the caller must also have built the .ass with
-    matching time_offset so subs stay synced with voice.
-
-    If `mid_flash_thumbnail` is given, overlay it as a brief freeze frame at the
-    midpoint of the spoken portion. This is what makes YouTube's auto-thumbnail
-    pick a branded frame (independent of the API custom-thumbnail upload, which
-    sometimes gets rejected silently)."""
+    matching time_offset so subs stay synced with voice."""
     if isinstance(bg_clips, (str, Path)):
         bg_clips = [Path(bg_clips)]
     bg_clips = [Path(c) for c in bg_clips]
@@ -458,8 +440,6 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
 
     has_intro = intro_thumbnail is not None and Path(intro_thumbnail).exists()
     intro_dur = intro_duration if has_intro else 0.0
-    has_mid_flash = (mid_flash_thumbnail is not None
-                     and Path(mid_flash_thumbnail).exists())
 
     xfade_dur = 0.4
     bg_chain_dur = audio_duration + 0.5
@@ -485,12 +465,6 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
     else:
         audio_input_idx = n
     inputs.extend(["-i", str(audio_path)])
-    if has_mid_flash:
-        # No -t here: let the still image loop indefinitely. -shortest at
-        # the output trims to the spoken+intro length (subs/audio chain).
-        inputs.extend(["-loop", "1", "-framerate", "30",
-                       "-i", str(mid_flash_thumbnail)])
-        flash_input_idx = audio_input_idx + 1
 
     fc_parts = []
     for i in range(n):
@@ -513,7 +487,6 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
             prev = label
         bg_label = prev
 
-    sub_out = "[subv]" if has_mid_flash else "[outv]"
     if has_intro:
         fc_parts.append(
             f"[{intro_input_idx}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -521,39 +494,14 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
             f"format=yuv420p,fps=30,setsar=1[intro]"
         )
         fc_parts.append(f"[intro]{bg_label}concat=n=2:v=1:a=0[bgv]")
-        fc_parts.append(f"[bgv]subtitles='{ass_str}'{sub_out}")
+        fc_parts.append(f"[bgv]subtitles='{ass_str}'[outv]")
         fc_parts.append(
             f"[{audio_input_idx}:a]adelay={int(intro_dur * 1000)}|{int(intro_dur * 1000)}[outa]"
         )
         audio_map = "[outa]"
     else:
-        fc_parts.append(f"{bg_label}subtitles='{ass_str}'{sub_out}")
+        fc_parts.append(f"{bg_label}subtitles='{ass_str}'[outv]")
         audio_map = f"{audio_input_idx}:a"
-
-    f_start = f_end = None
-    if has_mid_flash:
-        # Place the flash at the spoken midpoint. Total video timeline is
-        # [0, intro_dur + bg_chain_dur]. The intro is held for intro_dur,
-        # then the spoken bg chain plays. Center the flash at the midpoint
-        # of the SPOKEN portion (intro_dur + audio_duration/2) so it lands
-        # in YT's auto-thumbnail sampling window regardless of total length.
-        mid_t = intro_dur + audio_duration / 2.0
-        f_start = max(intro_dur + 0.5, mid_t - mid_flash_duration / 2.0)
-        f_end = f_start + mid_flash_duration
-        # Image input loops indefinitely; overlay's enable= window picks
-        # exactly when to composite. No setpts trick needed.
-        fc_parts.append(
-            f"[{flash_input_idx}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-            f"crop=1080:1920,format=yuv420p,fps=30,setsar=1[flash]"
-        )
-        # shortest=1: overlay output terminates with [subv] (finite). Without
-        # this, [flash]'s infinite -loop 1 input keeps overlay generating
-        # frames forever — the muxer's -shortest only kicks in after the
-        # filter graph emits, so we hang. shortest=1 stops overlay cleanly.
-        fc_parts.append(
-            f"[subv][flash]overlay=shortest=1:"
-            f"enable='between(t,{f_start:.3f},{f_end:.3f})'[outv]"
-        )
     fc = ";".join(fc_parts)
 
     cmd = ["ffmpeg", "-y"] + inputs + [
@@ -567,10 +515,7 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
         str(output_path),
     ]
     intro_msg = f", +{intro_dur}s thumbnail intro" if has_intro else ""
-    flash_msg = (f", {mid_flash_duration}s mid-flash @ {f_start:.1f}s"
-                 if has_mid_flash and f_start is not None else "")
-    print(f"[render] {n} klip xfade chain, per-clip={per_clip:.1f}s"
-          f"{intro_msg}{flash_msg}, FFmpeg calisiyor...")
+    print(f"[render] {n} klip xfade chain, per-clip={per_clip:.1f}s{intro_msg}, FFmpeg calisiyor...")
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(res.stderr[-2000:])
@@ -728,8 +673,7 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
 
     out_path = workdir / "short.mp4"
     render_video(clip_paths, audio_path, subs_path, duration, out_path,
-                 intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION,
-                 mid_flash_thumbnail=thumb_path)
+                 intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION)
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")

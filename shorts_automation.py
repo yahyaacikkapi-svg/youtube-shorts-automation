@@ -546,8 +546,12 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
             f"[{flash_input_idx}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
             f"crop=1080:1920,format=yuv420p,fps=30,setsar=1[flash]"
         )
+        # shortest=1: overlay output terminates with [subv] (finite). Without
+        # this, [flash]'s infinite -loop 1 input keeps overlay generating
+        # frames forever — the muxer's -shortest only kicks in after the
+        # filter graph emits, so we hang. shortest=1 stops overlay cleanly.
         fc_parts.append(
-            f"[subv][flash]overlay=shortest=0:"
+            f"[subv][flash]overlay=shortest=1:"
             f"enable='between(t,{f_start:.3f},{f_end:.3f})'[outv]"
         )
     fc = ";".join(fc_parts)

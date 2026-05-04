@@ -50,6 +50,15 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
+            # One-off skip: user already uploaded the 2026-05-04 TR 19:00 video
+            # manually, so the daytime cron for that date should not double up.
+            # Tonight's 21:42 UTC (TR 01:00 5 May slot) and everything after
+            # runs as normal.
+            NOW_UTC=$(date -u +%Y-%m-%d_%H)
+            if [ "$NOW_UTC" = "2026-05-04_15" ]; then
+              echo "[skip] 2026-05-04 TR 19:00 slot atlanıyor (manuel yüklendi)"
+              exit 0
+            fi
             python shorts_automation.py --privacy private --publish-at-tr "19:00,01:00" --upload-thumbnail
           elif [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             python shorts_automation.py --no-upload

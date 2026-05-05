@@ -50,15 +50,21 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # One-off skip: user already uploaded the 2026-05-04 TR 19:00 video
-            # manually, so the daytime cron for that date should not double up.
-            # Tonight's 21:42 UTC (TR 01:00 5 May slot) and everything after
-            # runs as normal.
             NOW_UTC=$(date -u +%Y-%m-%d_%H)
-            if [ "$NOW_UTC" = "2026-05-04_15" ]; then
-              echo "[skip] 2026-05-04 TR 19:00 slot atlanıyor (manuel yüklendi)"
-              exit 0
-            fi
+            # Per-slot topic pin (one-off): force a specific topic for an upcoming
+            # cron run instead of random.choice. Slot = UTC date_hour. Read by
+            # shorts_automation.py via TOPIC_SEED_OVERRIDE env. Stale entries auto
+            # no-op once the slot passes.
+            case "$NOW_UTC" in
+              2026-05-05_21)
+                export TOPIC_SEED_OVERRIDE="Door-in-the-face technique: how rejection makes people easier to control"
+                echo "[pin] $NOW_UTC -> manipulation: $TOPIC_SEED_OVERRIDE"
+                ;;
+              2026-05-06_15)
+                export TOPIC_SEED_OVERRIDE="Misattribution of arousal: why scary dates feel like love at first sight"
+                echo "[pin] $NOW_UTC -> attraction: $TOPIC_SEED_OVERRIDE"
+                ;;
+            esac
             python shorts_automation.py --privacy private --publish-at-tr "19:00,01:00" --upload-thumbnail
           elif [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             python shorts_automation.py --no-upload

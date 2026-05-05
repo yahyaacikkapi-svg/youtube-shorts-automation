@@ -80,18 +80,109 @@ def generate_fun_fact():
     model = genai.GenerativeModel("gemini-2.5-flash-lite")  # ücretsiz, hızlı
 
     topics = [
-        "a cognitive bias that secretly controls everyday decisions",
-        "a counterintuitive truth about how memory actually works",
-        "a manipulation tactic used by con artists and advertisers",
-        "a quirk of human attention or perception that feels like a glitch",
-        "a social psychology experiment with a disturbing result",
-        "a weird thing the brain does during sleep or dreaming",
-        "a mind hack backed by research that improves focus, sleep, or mood",
-        "an unsettling fact about why people lie, cheat, or conform",
-        "a hidden mechanism behind anxiety, motivation, or procrastination",
-        "a habit-formation insight that sounds simple but is rarely applied",
+        # === Klasik kognitif biaslar (12) ===
+        "Zeigarnik effect: why unfinished tasks hijack your brain at midnight",
+        "Misinformation effect: how one word can rewrite your eyewitness memory",
+        "Choice blindness: the experiment where people defended choices they never made",
+        "Dunning-Kruger trap that makes beginners feel dangerously certain",
+        "Spotlight effect: why nobody noticed the thing ruining your confidence",
+        "Frequency illusion: why learning one word makes reality feel targeted",
+        "Affective forecasting: why your brain lies about future happiness",
+        "Peak-end rule: why painful experiences become good memories",
+        "IKEA effect: why effort makes terrible ideas feel valuable",
+        "Sunk cost fallacy: why smart people stay in doomed relationships",
+        "False consensus effect: why your brain assumes everyone secretly agrees",
+        "Hindsight bias: why disasters feel obvious only after they happen",
+
+        # === Hafıza ve algı (8) ===
+        "Loftus shopping mall study: how children remembered being lost forever",
+        "Memory reconsolidation: why recalling trauma can accidentally edit it",
+        "Google effect: why searchable facts vanish from your actual brain",
+        "DRM false memory task: when your brain invents words with confidence",
+        "Serial position effect: why beginnings and endings manipulate memory",
+        "Change blindness: the door experiment that proves attention is fake",
+        "Inattentional blindness: why people miss obvious things in plain sight",
+        "Illusory truth effect: how repetition makes nonsense feel factual",
+
+        # === Uyku ve rüyalar (6) ===
+        "Tetris effect: why repetition invades dreams and waking thoughts",
+        "Targeted memory reactivation: sounds during sleep that secretly steer learning",
+        "Sleep paralysis hallucinations: why your brain creates bedroom intruders",
+        "Dream-lag effect: why old emotional events ambush dreams days later",
+        "REM rebound: why suppressing sleep can unleash violent dream intensity",
+        "Lucid dreaming research: what scientists found inside conscious dreams",
+
+        # === Manipülasyon ve ikna (8) ===
+        "Door-in-the-face technique: how rejection makes people easier to control",
+        "Foot-in-the-door effect: the tiny request that predicts compliance",
+        "Ben Franklin effect: why helping someone can make them like you",
+        "Scarcity heuristic: why limited offers make rational people panic-buy",
+        "Pique technique: weird requests that bypass automatic refusal",
+        "Reciprocity hack: how a free pen makes you donate ten times more",
+        "Anchoring bias in negotiation: why the first number wins",
+        "Dark pattern psychology: why apps engineer regret",
+
+        # === Sosyal psikoloji deneyleri (6) ===
+        "Asch conformity lines: why obvious truth collapses under group pressure",
+        "Bystander effect after Kitty Genovese: when crowds make danger invisible",
+        "Robbers Cave experiment: how children became enemies in days",
+        "Pluralistic ignorance: why everyone stays silent while privately disagreeing",
+        "Milgram lost-letter study: how strangers reveal hidden social loyalties",
+        "Stanford prison flaws: what really happened that nobody talks about",
+
+        # === Anksiyete, depresyon, motivasyon (8) ===
+        "Learned helplessness: the experiment where escape stopped feeling possible",
+        "Mood-congruent memory: why sadness selectively retrieves your worst evidence",
+        "Intolerance of uncertainty: the anxiety loop disguised as planning",
+        "Rumination trap: why analyzing pain can keep depression alive",
+        "Ironic process theory: why suppressing thoughts makes them louder",
+        "Attentional residue: why task-switching leaves part of your brain behind",
+        "Implementation intentions: the if-then plan that beats motivation",
+        "Parkinson's law: why work expands to devour every deadline",
+
+        # === Alışkanlık ve bağımlılık (6) ===
+        "Variable reward schedules: why unpredictable wins make habits addictive",
+        "Cue-reactivity: how environments trigger cravings before conscious choice",
+        "Extinction burst: why bad habits get worse right before breaking",
+        "Operant conditioning in apps: why streaks make quitting feel dangerous",
+        "Habit stacking: the cue chain that bypasses willpower",
+        "Dopamine prediction error: why anticipation feels better than reward",
+
+        # === Çekicilik / ilişkiler (8) ===
+        "Mere exposure effect: why familiarity beats good looks every time",
+        "Misattribution of arousal: why scary dates feel like love at first sight",
+        "Reciprocity of liking: how knowing someone likes you flips your interest",
+        "Pratfall effect: why competent people become MORE attractive after a slip",
+        "Halo effect in dating: why one trait colors every judgment",
+        "Color red and attraction: the wavelength that hijacks first impressions",
+        "Voice pitch perception: what split-second voice cues reveal about confidence",
+        "Hard-to-get paradox: when scarcity backfires in dating",
+
+        # === Çocuk gelişimi / aile (6) ===
+        "Still-face experiment: the moment babies panic when connection disappears",
+        "Marshmallow test twist: why self-control was partly about trust",
+        "Strange situation: the 60-second test that predicts adult attachment",
+        "Visual cliff experiment: how babies learn what their mothers fear",
+        "Theory of mind milestone: when kids realize you can be wrong",
+        "Linguistic relativity in toddlers: how words secretly shape thoughts",
+
+        # === Kişilik / karanlık üçlü (6) ===
+        "Dark Triad screening: the three traits employers secretly miss",
+        "Narcissistic supply cycle: how attention becomes a controlled drug",
+        "Machiavellian persuasion: cold reading tricks normalized into charm",
+        "Big Five neuroticism research: why some brains feel everything louder",
+        "Trait-state distinction: why moods lie about who you really are",
+        "Imposter syndrome research: why successful people feel the most fake",
+
+        # === Garip nörobilim (6) ===
+        "Phantom limb pain: why amputees feel fingers that aren't there",
+        "Capgras delusion: when loved ones look like exact impostors",
+        "Synesthesia research: people who literally taste shapes",
+        "Blindsight: when blind eyes still know what is in front of them",
+        "Split-brain patients: when one hand fights the other",
+        "Mirror touch synesthesia: feeling another person's bruise on your skin",
     ]
-    topic_seed = random.choice(topics)
+    topic_seed = os.getenv("TOPIC_SEED_OVERRIDE") or random.choice(topics)
 
     prompt = f"""You are a viral YouTube Shorts scriptwriter for a psychology / mind-science channel.
 Tone: exciting, mysterious, fast-paced, addictive. Make viewers say "wait, what?" in 2 seconds

@@ -721,7 +721,7 @@ INTRO_DURATION = 1.2  # thumbnail held as silent intro frame at the start of the
 
 
 def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
-                 publish_at_tr_slots=None, upload_thumbnail=False):
+                 publish_at_tr_slots=None, publish_at_utc=None, upload_thumbnail=False):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir = OUTPUT_DIR / ts
     workdir.mkdir(exist_ok=True)
@@ -770,7 +770,10 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         print(f"[main] Yukleme atlandi. Video: {out_path}")
         return out_path
     publish_at = None
-    if publish_at_tr_slots and privacy != "public":
+    if publish_at_utc and privacy != "public":
+        publish_at = publish_at_utc
+        print(f"[main] publishAt (explicit): {publish_at}")
+    elif publish_at_tr_slots and privacy != "public":
         publish_at = _next_publish_tr_slot(publish_at_tr_slots)
         print(f"[main] publishAt (next TR slot): {publish_at}")
     elif auto_public_after > 0 and privacy != "public":
@@ -804,6 +807,9 @@ def main():
     # Custom thumbnail YT upload is OFF by default — Shorts ignores the custom thumbnail
     # in feed/grid, so the 1.2s in-video intro frame from thumbnail.png does the job.
     # Pass --upload-thumbnail to opt in (e.g. for non-Shorts uploads).
+    p.add_argument("--publish-at-utc", default=None,
+                   help="Explicit publishAt UTC ISO datetime (orn: '2026-05-12T16:00:00.000Z'). "
+                        "--publish-at-tr yerine kullan bulk upload icin.")
     p.add_argument("--upload-thumbnail", action="store_true",
                    help="YT'ye custom thumbnail yukle (varsayilan: kapali, video icindeki "
                         "1.2sn intro yetiyor cunku Shorts custom thumbnail'i feed'de gostermiyor)")
@@ -825,6 +831,7 @@ def main():
         privacy=privacy,
         auto_public_after=args.auto_public_after,
         publish_at_tr_slots=args.publish_at_tr,
+        publish_at_utc=args.publish_at_utc,
         upload_thumbnail=args.upload_thumbnail,
     )
 

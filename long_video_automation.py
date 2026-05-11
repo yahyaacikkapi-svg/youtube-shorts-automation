@@ -54,7 +54,7 @@ ELEVENLABS_VOICE_ID = "J2FGlQG8Gd7x8uEDt2H8"
 ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-VIDEO_W, VIDEO_H = 1080, 1920
+VIDEO_W, VIDEO_H = 1920, 1080
 
 
 # --------- 1. Script (Gemini) ---------
@@ -114,8 +114,8 @@ def generate_script(topic):
 # --------- 2. TTS + subtitles (ElevenLabs) ---------
 LONG_ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: 1920
+PlayResY: 1080
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 

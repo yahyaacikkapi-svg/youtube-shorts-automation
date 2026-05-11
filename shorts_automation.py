@@ -52,6 +52,7 @@ TOKEN_JSON = ROOT / "token.json"
 OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 BRAND_DIR = ROOT / "brand"
+FONTS_DIR = ROOT / "fonts"
 
 load_dotenv(ENV_PATH)
 
@@ -254,7 +255,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Impact,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,40,40,180,1
+Style: Default,Montserrat Bold,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,40,40,180,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -573,7 +574,12 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
     per_clip = (bg_chain_dur + (n - 1) * xfade_dur) / n
     per_clip = min(per_clip, 15.0) if n > 1 else bg_chain_dur
 
-    ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
+    def _ffmpeg_path(p):
+        s = str(p).replace("\\", "/")
+        return s.replace(":", "\\:", 1) if ":" in s else s
+
+    ass_str = _ffmpeg_path(ass_path)
+    fonts_str = _ffmpeg_path(FONTS_DIR)
 
     inputs = []
     for clip in bg_clips:
@@ -615,13 +621,13 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
             f"format=yuv420p,fps=30,setsar=1[intro]"
         )
         fc_parts.append(f"[intro]{bg_label}concat=n=2:v=1:a=0[bgv]")
-        fc_parts.append(f"[bgv]subtitles='{ass_str}'[outv]")
+        fc_parts.append(f"[bgv]subtitles='{ass_str}':fontsdir='{fonts_str}'[outv]")
         fc_parts.append(
             f"[{audio_input_idx}:a]adelay={int(intro_dur * 1000)}|{int(intro_dur * 1000)}[outa]"
         )
         audio_map = "[outa]"
     else:
-        fc_parts.append(f"{bg_label}subtitles='{ass_str}'[outv]")
+        fc_parts.append(f"{bg_label}subtitles='{ass_str}':fontsdir='{fonts_str}'[outv]")
         audio_map = f"{audio_input_idx}:a"
     fc = ";".join(fc_parts)
 

@@ -1,0 +1,62 @@
+name: YouTube Long Video (Weekly Sunday)
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: "Skip YouTube upload (test only)"
+        required: false
+        type: boolean
+        default: false
+
+  schedule:
+    - cron: "40 7 * * 0"  # Her Pazar UTC 07:40 = TR 10:40
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set background video dir (Linux placeholder)
+        run: |
+          mkdir -p "youtube uzun videolar"
+          echo "Not: Arkaplan videolari bu repoda yok, asagidaki adimi ekle."
+
+      - name: Run long video automation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
+            python long_video_automation.py --no-upload
+          else
+            python long_video_automation.py
+          fi
+
+      - name: Upload outputs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-video-${{ github.run_id }}
+          path: outputs_long/
+          retention-days: 3
+          if-no-files-found: ignore

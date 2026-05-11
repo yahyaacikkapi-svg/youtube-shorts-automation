@@ -41,7 +41,8 @@ TOKEN_JSON = ROOT / "token.json"
 OUTPUT_DIR = ROOT / "outputs_long"
 OUTPUT_DIR.mkdir(exist_ok=True)
 FONTS_DIR = ROOT / "fonts"
-BG_VIDEO_DIR = Path(r"C:\Users\pc\OneDrive\Masaüstü\youtube uzun videolar")
+_default_bg = r"C:\Users\pc\OneDrive\Masaüstü\youtube uzun videolar"
+BG_VIDEO_DIR = Path(os.getenv("BG_VIDEO_DIR", _default_bg))
 
 load_dotenv(ENV_PATH)
 

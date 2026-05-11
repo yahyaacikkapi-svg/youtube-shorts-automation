@@ -33,10 +33,19 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Set background video dir (Linux placeholder)
+      - name: Install yt-dlp
+        run: pip install yt-dlp
+
+      - name: Download background videos
         run: |
-          mkdir -p "youtube uzun videolar"
-          echo "Not: Arkaplan videolari bu repoda yok, asagidaki adimi ekle."
+          mkdir -p bg_videos
+          yt-dlp \
+            --format "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]" \
+            --merge-output-format mp4 \
+            -o "bg_videos/%(id)s.mp4" \
+            "https://www.youtube.com/watch?v=s7N7SJ8zcT8" \
+            "https://www.youtube.com/watch?v=1uuLhMTbMDg"
+          ls -lh bg_videos/
 
       - name: Run long video automation
         env:
@@ -45,6 +54,7 @@ jobs:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          BG_VIDEO_DIR: bg_videos
         run: |
           if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             python long_video_automation.py --no-upload

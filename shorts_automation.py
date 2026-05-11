@@ -3,7 +3,7 @@ YouTube Shorts Otomasyonu
 =========================
 Tek komutla:
   - Gemini ile psikoloji/davranis bilimi script'i üretir
-  - edge-tts ile İngilizce seslendirme yapar
+  - ElevenLabs ile İngilizce seslendirme yapar
   - Pexels'tan portre stok video çeker
   - FFmpeg ile 9:16 dikey video render eder (kelime kelime altyazılı)
   - YouTube'a Short olarak yükler
@@ -19,19 +19,18 @@ import sys
 import json
 import time
 import random
-import asyncio
 import argparse
 import subprocess
+import base64
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --------- 3rd-party imports (try-except for friendlier errors) ---------
 try:
     import requests
     from dotenv import load_dotenv
     import google.generativeai as genai
-    import edge_tts
-    from edge_tts import SubMaker
+    from elevenlabs.client import ElevenLabs as ElevenLabsClient
     from google_auth_oauthlib.flow import InstalledAppFlow
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
@@ -40,7 +39,7 @@ try:
     from PIL import Image, ImageDraw, ImageFont, ImageFilter
 except ImportError as e:
     print(f"[hata] Eksik paket: {e.name}")
-    print("Kurulum: pip install google-generativeai edge-tts google-auth google-auth-oauthlib "
+    print("Kurulum: pip install google-generativeai elevenlabs google-auth google-auth-oauthlib "
           "google-api-python-client python-dotenv requests Pillow")
     sys.exit(1)
 
@@ -58,10 +57,12 @@ load_dotenv(ENV_PATH)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16
 TARGET_DURATION_RANGE = (28, 55)  # seconds
-VOICE = "en-US-AndrewMultilingualNeural"  # most expressive storyteller voice
+ELEVENLABS_VOICE_ID = "J2FGlQG8Gd7x8uEDt2H8"
+ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
@@ -302,20 +303,49 @@ def _build_ass(cues, time_offset, ass_path):
     Path(ass_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-async def _generate_voice_async(text, audio_path, ass_path, time_offset=0.0):
-    sub_maker = SubMaker()
-    communicate = edge_tts.Communicate(text, VOICE, rate="+8%", boundary="WordBoundary")
-    with open(audio_path, "wb") as audio_file:
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_file.write(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
-                sub_maker.feed(chunk)
-    _build_ass(sub_maker.cues, time_offset, ass_path)
+class _WordCue:
+    def __init__(self, content, start_s, end_s):
+        self.content = content
+        self.start = timedelta(seconds=start_s)
+        self.end = timedelta(seconds=end_s)
+
+
+def _char_to_word_cues(characters, start_times, end_times):
+    cues = []
+    word_chars, word_start, word_end = [], 0.0, 0.0
+    for char, start, end in zip(characters, start_times, end_times):
+        if char in (" ", "\n", "\t"):
+            if word_chars:
+                cues.append(_WordCue("".join(word_chars), word_start, word_end))
+                word_chars = []
+        else:
+            if not word_chars:
+                word_start = start
+            word_chars.append(char)
+            word_end = end
+    if word_chars:
+        cues.append(_WordCue("".join(word_chars), word_start, word_end))
+    return cues
 
 
 def generate_voice(text, audio_path, ass_path, time_offset=0.0):
-    asyncio.run(_generate_voice_async(text, audio_path, ass_path, time_offset))
+    if not ELEVENLABS_API_KEY:
+        raise RuntimeError("ELEVENLABS_API_KEY .env'de yok")
+    client = ElevenLabsClient(api_key=ELEVENLABS_API_KEY)
+    response = client.text_to_speech.convert_with_timestamps(
+        voice_id=ELEVENLABS_VOICE_ID,
+        text=text,
+        model_id=ELEVENLABS_MODEL,
+        output_format="mp3_44100_128",
+    )
+    Path(audio_path).write_bytes(base64.b64decode(response.audio_base_64))
+    al = response.alignment
+    cues = _char_to_word_cues(
+        al.characters,
+        al.character_start_times_seconds,
+        al.character_end_times_seconds,
+    )
+    _build_ass(cues, time_offset, ass_path)
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],

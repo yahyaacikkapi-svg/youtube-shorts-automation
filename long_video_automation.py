@@ -27,6 +27,7 @@ try:
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
 except ImportError as e:
     print(f"[hata] Eksik paket: {e.name}")
     print("Kurulum: pip install google-generativeai elevenlabs google-auth "
@@ -41,6 +42,7 @@ TOKEN_JSON = ROOT / "token.json"
 OUTPUT_DIR = ROOT / "outputs_long"
 OUTPUT_DIR.mkdir(exist_ok=True)
 FONTS_DIR = ROOT / "fonts"
+BRAND_DIR = ROOT / "brand"
 _default_bg = r"C:\Users\pc\OneDrive\Masaüstü\youtube uzun videolar"
 BG_VIDEO_DIR = Path(os.getenv("BG_VIDEO_DIR", _default_bg))
 
@@ -205,7 +207,113 @@ def generate_voice_long(text, audio_path, ass_path):
     return duration
 
 
-# --------- 3. Background video segments ---------
+# --------- 3. Thumbnail ---------
+THUMB_FONT_CANDIDATES = [
+    str(FONTS_DIR / "Montserrat-Bold.ttf"),
+    "C:/Windows/Fonts/ariblk.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+
+def _pick_thumb_font(size):
+    for path in THUMB_FONT_CANDIDATES:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def _wrap_lines(text, font, max_width, draw):
+    words = text.split()
+    lines, current = [], ""
+    for w in words:
+        candidate = (current + " " + w).strip()
+        bbox = draw.textbbox((0, 0), candidate, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines
+
+
+def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
+    """16:9 (1280x720) branded thumbnail for YouTube custom thumbnail upload."""
+    target_w, target_h = 1280, 720
+    workdir = Path(out_path).parent
+    frame_path = workdir / "_thumb_frame.png"
+    res = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(bg_video_path), "-vframes", "1", "-q:v", "2", str(frame_path)],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0 or not frame_path.exists():
+        raise RuntimeError("Thumbnail frame alinamadi")
+
+    img = Image.open(frame_path).convert("RGB")
+    w, h = img.size
+    target_ratio = target_w / target_h
+    src_ratio = w / h
+    if src_ratio > target_ratio:
+        new_w = int(h * target_ratio)
+        img = img.crop(((w - new_w) // 2, 0, (w - new_w) // 2 + new_w, h))
+    else:
+        new_h = int(w / target_ratio)
+        img = img.crop((0, (h - new_h) // 2, w, (h - new_h) // 2 + new_h))
+    img = img.resize((target_w, target_h), Image.LANCZOS)
+    img = img.filter(ImageFilter.GaussianBlur(radius=8))
+    dark = Image.new("RGB", img.size, (0, 0, 0))
+    img = Image.blend(img, dark, 0.45)
+    img = img.convert("RGBA")
+
+    text = (thumbnail_text or "").upper().strip() or "PSYCHOLOGY"
+    draw = ImageDraw.Draw(img)
+    max_text_width = target_w - int(target_w * 0.12)
+    font_size = max(60, min(140, target_h // 4))
+    while font_size > 40:
+        font = _pick_thumb_font(font_size)
+        lines = _wrap_lines(text, font, max_text_width, draw)
+        line_h = font.getbbox("Ay")[3] - font.getbbox("Ay")[1]
+        total_h = len(lines) * (line_h + 16)
+        widest = max((draw.textbbox((0, 0), ln, font=font)[2] for ln in lines), default=0)
+        if widest <= max_text_width and total_h <= target_h * 0.6:
+            break
+        font_size -= 10
+    font = _pick_thumb_font(font_size)
+    lines = _wrap_lines(text, font, max_text_width, draw)
+    line_h = font.getbbox("Ay")[3] - font.getbbox("Ay")[1]
+    total_h = len(lines) * (line_h + 16)
+    y = (target_h - total_h) // 2
+    shift = max(3, font_size // 28)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        x = (target_w - (bbox[2] - bbox[0])) // 2
+        draw.text((x - shift, y), line, font=font, fill=(0, 229, 255, 220))
+        draw.text((x + shift, y), line, font=font, fill=(255, 0, 128, 220))
+        draw.text((x, y + 3), line, font=font, fill=(0, 0, 0, 180))
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        y += line_h + 16
+
+    logo_path = BRAND_DIR / "profile.png"
+    if logo_path.exists():
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            logo.thumbnail((100, 100), Image.LANCZOS)
+            img.paste(logo, (40, target_h - logo.size[1] - 40), logo)
+        except Exception:
+            pass
+
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
+    try:
+        frame_path.unlink()
+    except OSError:
+        pass
+    print(f"[thumb] Hazir -> {Path(out_path).name} {target_w}x{target_h}")
+
+
+# --------- 4. Background video segments ---------
 def _get_duration(path):
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -344,7 +452,7 @@ def _next_sunday_publish_at():
     return target.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def upload_to_youtube(video_path, title, description, tags, publish_at):
+def upload_to_youtube(video_path, title, description, tags, publish_at, thumbnail_path=None):
     creds = get_youtube_creds()
     youtube = build("youtube", "v3", credentials=creds)
     body = {
@@ -370,6 +478,17 @@ def upload_to_youtube(video_path, title, description, tags, publish_at):
     video_id = response["id"]
     print(f"[upload] Yuklendi: https://youtube.com/watch?v={video_id}")
     print(f"[upload] Public olacak: {publish_at}")
+
+    if thumbnail_path and Path(thumbnail_path).exists():
+        try:
+            youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
+            ).execute()
+            print(f"[upload] Thumbnail yuklendi: {Path(thumbnail_path).name}")
+        except Exception as e:
+            print(f"[upload] Thumbnail yuklenemedi (devam): {e}")
+
     return video_id
 
 
@@ -398,6 +517,13 @@ def run_pipeline(skip_upload=False):
     segments = _plan_segments(bg_videos, duration, chunk_size=75.0)
     print(f"[bg] {len(segments)} segment planlandı, toplam ≈ {sum(s[2] for s in segments):.0f}s")
 
+    thumb_path = workdir / "thumbnail.png"
+    try:
+        generate_thumbnail(bg_videos[0], meta.get("thumbnail_text", ""), thumb_path)
+    except Exception as e:
+        print(f"[thumb] uretilemedi, atlanacak: {e}")
+        thumb_path = None
+
     out_path = workdir / "long_video.mp4"
     render_long_video(segments, audio_path, ass_path, out_path)
 
@@ -407,7 +533,10 @@ def run_pipeline(skip_upload=False):
 
     publish_at = _next_sunday_publish_at()
     print(f"[main] publishAt: {publish_at} (Pazar TR 11:00)")
-    upload_to_youtube(out_path, meta["title"], meta["description"], meta["tags"], publish_at)
+    upload_to_youtube(
+        out_path, meta["title"], meta["description"], meta["tags"],
+        publish_at, thumbnail_path=thumb_path,
+    )
     print("[main] Tamam.")
     return out_path
 

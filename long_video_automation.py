@@ -55,6 +55,11 @@ ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 VIDEO_W, VIDEO_H = 1920, 1080
+COLD_OPEN_DUR = 8.0
+INTRO_DUR = 5.0
+CHANNEL_NAME = os.getenv("CHANNEL_NAME", "")
+MUSIC_DIR = Path(r"C:\Users\pc\OneDrive\Masaüstü\youtube uzun video müzik")
+INTRO_MUSIC_PATH = MUSIC_DIR / "intro muzik.mp3"
 
 
 # --------- 1. Script (Gemini) ---------
@@ -179,6 +184,19 @@ def _build_ass_long(cues, ass_path):
     Path(ass_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _split_ass(cues, split_at, cold_ass_path, main_ass_path):
+    """Split word cues at split_at seconds into two ASS files."""
+    cold_cues = [c for c in cues if c.start.total_seconds() < split_at]
+    main_cues = [
+        _WordCue(c.content,
+                 c.start.total_seconds() - split_at,
+                 c.end.total_seconds() - split_at)
+        for c in cues if c.start.total_seconds() >= split_at
+    ]
+    _build_ass_long(cold_cues, cold_ass_path)
+    _build_ass_long(main_cues, main_ass_path)
+
+
 def generate_voice_long(text, audio_path, ass_path):
     if not ELEVENLABS_API_KEY:
         raise RuntimeError("ELEVENLABS_API_KEY .env'de yok")
@@ -204,7 +222,7 @@ def generate_voice_long(text, audio_path, ass_path):
     )
     duration = float(out.stdout.strip())
     print(f"[voice] {duration:.1f}s ses uretildi -> {Path(audio_path).name}")
-    return duration
+    return duration, cues
 
 
 # --------- 3. Thumbnail ---------
@@ -313,7 +331,160 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path):
     print(f"[thumb] Hazir -> {Path(out_path).name} {target_w}x{target_h}")
 
 
-# --------- 4. Background video segments ---------
+# --------- 4. Intro + cold open ---------
+def _render_intro_clip(workdir):
+    """Brain Static intro: siyah bg + logo fade in/out + intro muzigi. 5 saniye."""
+    logo_path = BRAND_DIR / "profile.png"
+    out_path = workdir / "_intro.mp4"
+    has_logo = logo_path.exists()
+    has_music = INTRO_MUSIC_PATH.exists()
+
+    # Timing: 0-1s fade in, 1-3s visible, 3-4s fade out, 4-5s black
+    fade_in_d = 1.0
+    fade_out_st = 3.0
+    fade_out_d = 1.0
+
+    inputs = [
+        "-f", "lavfi", "-i",
+        f"color=c=black:s={VIDEO_W}x{VIDEO_H}:d={INTRO_DUR}:r=30",
+    ]
+    fc = []
+    next_idx = 1
+
+    if has_logo:
+        inputs += ["-loop", "1", "-t", str(INTRO_DUR), "-i", str(logo_path)]
+        fc.append(
+            f"[{next_idx}:v]"
+            f"scale=400:400:force_original_aspect_ratio=decrease,"
+            f"pad=400:400:(ow-iw)/2:(oh-ih)/2:color=black@0,"
+            f"format=rgba,"
+            f"fade=t=in:st=0:d={fade_in_d}:alpha=1,"
+            f"fade=t=out:st={fade_out_st}:d={fade_out_d}:alpha=1"
+            f"[logo]"
+        )
+        logo_y = "(H-h)/2" if not CHANNEL_NAME else "(H-h)/2-50"
+        fc.append(f"[0:v][logo]overlay=(W-w)/2:{logo_y}[v1]")
+        next_idx += 1
+        prev_v = "[v1]"
+    else:
+        prev_v = "[0:v]"
+
+    if CHANNEL_NAME:
+        font_path = _ffmpeg_path(FONTS_DIR / "Montserrat-Bold.ttf")
+        escaped = CHANNEL_NAME.replace("'", r"\'").replace(":", r"\:")
+        fc.append(
+            f"{prev_v}"
+            f"drawtext=fontfile='{font_path}':text='{escaped}':"
+            f"fontsize=60:fontcolor=white:x=(w-text_w)/2:y=(h+400)/2+10:"
+            f"alpha='if(lt(t,{fade_in_d}),t/{fade_in_d},"
+            f"if(gt(t,{fade_out_st}),({fade_out_st}+{fade_out_d}-t)/{fade_out_d},1))'"
+            f"[v2]"
+        )
+        prev_v = "[v2]"
+
+    fc.append(
+        f"{prev_v}"
+        f"fade=t=in:st=0:d={fade_in_d},"
+        f"fade=t=out:st={fade_out_st}:d={fade_out_d}"
+        f"[outv]"
+    )
+
+    if has_music:
+        inputs += ["-i", str(INTRO_MUSIC_PATH)]
+        fc.append(
+            f"[{next_idx}:a]"
+            f"atrim=0:{INTRO_DUR},"
+            f"afade=t=in:st=0:d={fade_in_d},"
+            f"afade=t=out:st={fade_out_st}:d={fade_out_d}"
+            f"[outa]"
+        )
+    else:
+        inputs += ["-f", "lavfi", "-t", str(INTRO_DUR), "-i", "anullsrc=r=44100:cl=stereo"]
+        fc.append(f"[{next_idx}:a]asetpts=PTS-STARTPTS[outa]")
+
+    cmd = ["ffmpeg", "-y"] + inputs + [
+        "-filter_complex", ";".join(fc),
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", str(INTRO_DUR),
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        str(out_path),
+    ]
+    print(f"[intro] {INTRO_DUR}s Brain Static intro render ediliyor...")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(res.stderr[-2000:])
+        raise RuntimeError("Intro render basarisiz")
+    print(f"[intro] Hazir -> {out_path.name}")
+    return out_path
+
+
+def _render_cold_open_clip(bg_videos, audio_path, cold_ass_path, output_path):
+    """ilk COLD_OPEN_DUR saniye: bg video + voice, muzik yok."""
+    bg = bg_videos[0]
+    ass_str = _ffmpeg_path(cold_ass_path)
+    fonts_str = _ffmpeg_path(FONTS_DIR)
+    cmd = [
+        "ffmpeg", "-y",
+        "-t", str(COLD_OPEN_DUR), "-i", str(bg),
+        "-t", str(COLD_OPEN_DUR), "-i", str(audio_path),
+        "-filter_complex",
+        f"[0:v]scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
+        f"crop={VIDEO_W}:{VIDEO_H},setpts=PTS-STARTPTS,format=yuv420p,fps=30,setsar=1,"
+        f"subtitles='{ass_str}':fontsdir='{fonts_str}'[outv]",
+        "-map", "[outv]", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", str(COLD_OPEN_DUR),
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        str(output_path),
+    ]
+    print(f"[cold_open] {COLD_OPEN_DUR}s cold open render ediliyor...")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(res.stderr[-2000:])
+        raise RuntimeError("Cold open render basarisiz")
+    print(f"[cold_open] Hazir -> {Path(output_path).name}")
+
+
+def _concat_three(part_a, part_b, part_c, output_path):
+    """cold open + intro + main body birlestirir."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(part_a),
+        "-i", str(part_b),
+        "-i", str(part_c),
+        "-filter_complex",
+        "[0:v][0:a][1:v][1:a][2:v][2:a]concat=n=3:v=1:a=1[outv][outa]",
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "192k",
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        str(output_path),
+    ]
+    print("[concat] cold open + intro + main body birlestiriliyor...")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(res.stderr[-2000:])
+        raise RuntimeError("3-part concat basarisiz")
+    print(f"[concat] Final -> {Path(output_path).name}")
+
+
+# --------- 5. Background video segments ---------
+def _pick_music():
+    files = [f for f in sorted(MUSIC_DIR.glob("*.mp3")) if f != INTRO_MUSIC_PATH]
+    if not files:
+        print("[music] Arka plan muzik bulunamadi, muzik eklenmeyecek")
+        return None
+    chosen = random.choice(files)
+    print(f"[music] Secilen: {chosen.name}")
+    return chosen
+
+
 def _get_duration(path):
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -351,7 +522,7 @@ def _ffmpeg_path(p):
     return s.replace(":", "\\:", 1) if ":" in s else s
 
 
-def render_long_video(segments, audio_path, ass_path, output_path):
+def render_long_video(segments, audio_path, ass_path, output_path, music_path=None, voice_start=0.0):
     xfade_dur = 0.5
     n = len(segments)
     ass_str = _ffmpeg_path(ass_path)
@@ -360,8 +531,16 @@ def render_long_video(segments, audio_path, ass_path, output_path):
     inputs = []
     for vp, ss, dur in segments:
         inputs.extend(["-ss", f"{ss:.3f}", "-t", f"{dur:.3f}", "-i", str(vp)])
-    inputs.extend(["-i", str(audio_path)])
+    if voice_start > 0:
+        inputs.extend(["-ss", f"{voice_start:.3f}", "-i", str(audio_path)])
+    else:
+        inputs.extend(["-i", str(audio_path)])
     audio_input_idx = n
+
+    music_input_idx = None
+    if music_path and Path(music_path).exists():
+        inputs.extend(["-i", str(music_path)])
+        music_input_idx = n + 1
 
     fc_parts = []
     for i, (_, _, dur) in enumerate(segments):
@@ -386,11 +565,32 @@ def render_long_video(segments, audio_path, ass_path, output_path):
         bg_label = prev
 
     fc_parts.append(f"{bg_label}subtitles='{ass_str}':fontsdir='{fonts_str}'[outv]")
+
+    if music_input_idx is not None:
+        voice_dur = _get_duration(audio_path) - voice_start
+        fade_out_st = max(0.0, voice_dur - 3.0)
+        fc_parts.append(
+            f"[{music_input_idx}:a]"
+            f"aloop=loop=-1:size=2000000000,"
+            f"atrim=0:{voice_dur:.3f},"
+            f"asetpts=PTS-STARTPTS,"
+            f"volume=0.30,"
+            f"afade=t=in:st=0:d=2,"
+            f"afade=t=out:st={fade_out_st:.3f}:d=3"
+            f"[bgm]"
+        )
+        fc_parts.append(
+            f"[{audio_input_idx}:a][bgm]amix=inputs=2:duration=first:normalize=0[outa]"
+        )
+        map_audio = "[outa]"
+    else:
+        map_audio = f"{audio_input_idx}:a"
+
     fc = ";".join(fc_parts)
 
     cmd = ["ffmpeg", "-y"] + inputs + [
         "-filter_complex", fc,
-        "-map", "[outv]", "-map", f"{audio_input_idx}:a",
+        "-map", "[outv]", "-map", map_audio,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
@@ -406,7 +606,7 @@ def render_long_video(segments, audio_path, ass_path, output_path):
     print(f"[render] Hazir -> {output_path.name}")
 
 
-# --------- 4. YouTube upload ---------
+# --------- 6. YouTube upload ---------
 def get_youtube_creds():
     refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
     client_id = os.getenv("YOUTUBE_CLIENT_ID")
@@ -492,7 +692,7 @@ def upload_to_youtube(video_path, title, description, tags, publish_at, thumbnai
     return video_id
 
 
-# --------- 5. Pipeline ---------
+# --------- 7. Pipeline ---------
 def run_pipeline(skip_upload=False):
     from topics_long import TOPICS
     topic = random.choice(TOPICS)
@@ -507,15 +707,12 @@ def run_pipeline(skip_upload=False):
 
     audio_path = workdir / "voice_long.mp3"
     ass_path = workdir / "subs_long.ass"
-    duration = generate_voice_long(meta["script"], audio_path, ass_path)
+    duration, cues = generate_voice_long(meta["script"], audio_path, ass_path)
 
     bg_videos = sorted(BG_VIDEO_DIR.glob("*.mp4"))
     if not bg_videos:
         raise RuntimeError(f"MP4 bulunamadi: {BG_VIDEO_DIR}")
     print(f"[bg] {len(bg_videos)} arkaplan videosu bulundu")
-
-    segments = _plan_segments(bg_videos, duration, chunk_size=75.0)
-    print(f"[bg] {len(segments)} segment planlandı, toplam ≈ {sum(s[2] for s in segments):.0f}s")
 
     thumb_path = workdir / "thumbnail.png"
     try:
@@ -524,8 +721,38 @@ def run_pipeline(skip_upload=False):
         print(f"[thumb] uretilemedi, atlanacak: {e}")
         thumb_path = None
 
+    music_path = _pick_music()
+
+    # --- Altyazıları cold open / main olarak ikiye böl ---
+    cold_ass_path = workdir / "subs_cold_open.ass"
+    main_ass_path = workdir / "subs_main.ass"
+    _split_ass(cues, COLD_OPEN_DUR, cold_ass_path, main_ass_path)
+
+    # --- 1. Cold open: ilk 8s, müzik yok ---
+    cold_open_path = workdir / "_cold_open.mp4"
+    _render_cold_open_clip(bg_videos, audio_path, cold_ass_path, cold_open_path)
+
+    # --- 2. Brain Static intro: 5s ---
+    intro_path = _render_intro_clip(workdir)
+
+    # --- 3. Ana gövde: 8s sonrası, arka plan müziği ---
+    main_dur = duration - COLD_OPEN_DUR
+    segments_main = _plan_segments(bg_videos, main_dur, chunk_size=75.0)
+    print(f"[bg] {len(segments_main)} segment (main), toplam ~{sum(s[2] for s in segments_main):.0f}s")
+    body_path = workdir / "_body.mp4"
+    render_long_video(
+        segments_main, audio_path, main_ass_path, body_path,
+        music_path=music_path, voice_start=COLD_OPEN_DUR,
+    )
+
+    # --- Birleştir: cold open → intro → main body ---
     out_path = workdir / "long_video.mp4"
-    render_long_video(segments, audio_path, ass_path, out_path)
+    _concat_three(cold_open_path, intro_path, body_path, out_path)
+    for p in [cold_open_path, intro_path, body_path]:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")

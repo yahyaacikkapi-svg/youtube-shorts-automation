@@ -53,6 +53,8 @@ OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 BRAND_DIR = ROOT / "brand"
 FONTS_DIR = ROOT / "fonts"
+ASSETS_DIR = ROOT / "assets"
+MUSIC_PATH = ASSETS_DIR / "bg_music.mp3"  # Kevin MacLeod - Darkest Child (CC BY 3.0)
 
 load_dotenv(ENV_PATH)
 
@@ -542,7 +544,7 @@ def generate_thumbnail(bg_video_path, thumbnail_text, out_path, size=(1080, 1920
 
 # --------- 4. Render final video with ffmpeg ---------
 def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
-                 intro_thumbnail=None, intro_duration=1.2):
+                 intro_thumbnail=None, intro_duration=1.2, music_path=None):
     """Concat 1..N portrait clips with crossfade transitions, overlay subs, mux audio.
     Subs are a real .ass file (V4+ Styles + per-word color overrides) so the yellow
     accent words actually render — SRT swallows ASS override tags but .ass keeps them.
@@ -593,6 +595,11 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
         audio_input_idx = n
     inputs.extend(["-i", str(audio_path)])
 
+    music_input_idx = None
+    if music_path and Path(music_path).exists():
+        music_input_idx = audio_input_idx + 1
+        inputs.extend(["-stream_loop", "-1", "-i", str(music_path)])
+
     fc_parts = []
     for i in range(n):
         fc_parts.append(
@@ -629,6 +636,13 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
     else:
         fc_parts.append(f"{bg_label}subtitles='{ass_str}':fontsdir='{fonts_str}'[outv]")
         audio_map = f"{audio_input_idx}:a"
+
+    if music_input_idx is not None:
+        fc_parts.append(f"[{music_input_idx}:a]volume=0.10[bgm]")
+        voice_in = audio_map if audio_map.startswith("[") else f"[{audio_map}]"
+        fc_parts.append(f"{voice_in}[bgm]amix=inputs=2:duration=first:normalize=0[final_a]")
+        audio_map = "[final_a]"
+
     fc = ";".join(fc_parts)
 
     cmd = ["ffmpeg", "-y"] + inputs + [
@@ -800,7 +814,8 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
 
     out_path = workdir / "short.mp4"
     render_video(clip_paths, audio_path, subs_path, duration, out_path,
-                 intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION)
+                 intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION,
+                 music_path=MUSIC_PATH if MUSIC_PATH.exists() else None)
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")
@@ -816,10 +831,13 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         from datetime import timedelta, timezone
         dt = datetime.now(timezone.utc) + timedelta(seconds=auto_public_after)
         publish_at = dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    description = meta["description"]
+    if MUSIC_PATH.exists():
+        description += "\n\nMusic: Darkest Child by Kevin MacLeod (incompetech.com) | CC BY 3.0"
     video_id = upload_to_youtube(
         out_path,
         meta["title"],
-        meta["description"],
+        description,
         meta["tags"],
         privacy=privacy,
         publish_at=publish_at,

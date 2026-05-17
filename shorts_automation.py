@@ -804,6 +804,10 @@ def download_bg_music(workdir):
             print(f"[music] yt-dlp basarisiz ({query}): {res.stderr[-200:]}")
         except Exception as e:
             print(f"[music] yt-dlp hatasi: {e}")
+    fallback = ROOT / "assets" / "bg_music.mp3"
+    if fallback.exists():
+        print(f"[music] yt-dlp basarisiz, fallback kullaniliyor -> {fallback.name}")
+        return fallback
     print("[music] Muzik indirilemedi, sessiz devam ediliyor")
     return None
 
@@ -859,7 +863,7 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
     render_video(clip_paths, audio_path, subs_path, duration, out_path,
                  intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION,
                  music_path=music_path)
-    if music_path and music_path.exists():
+    if music_path and music_path.exists() and music_path.parent == workdir:
         music_path.unlink()
         print("[music] Gecici muzik dosyasi silindi")
 

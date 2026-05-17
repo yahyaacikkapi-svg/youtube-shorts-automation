@@ -1,18 +1,6 @@
 name: YouTube Shorts Auto-Pipeline
 
 on:
-  workflow_dispatch:
-    inputs:
-      privacy:
-        description: "Video privacy (private/unlisted/public)"
-        required: false
-        default: "public"
-      skip_upload:
-        description: "Skip YouTube upload (test only, downloads outputs as artifact)"
-        required: false
-        type: boolean
-        default: false
-
   schedule:
     - cron: "42 15,21 * * *"
 
@@ -46,29 +34,7 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            NOW_UTC=$(date -u +%Y-%m-%d_%H)
-            # Per-slot topic pin (one-off): force a specific topic for an upcoming
-            # cron run instead of random.choice. Slot = UTC date_hour. Read by
-            # shorts_automation.py via TOPIC_SEED_OVERRIDE env. Stale entries auto
-            # no-op once the slot passes.
-            case "$NOW_UTC" in
-              2026-05-05_21)
-                export TOPIC_SEED_OVERRIDE="Door-in-the-face technique: how rejection makes people easier to control"
-                echo "[pin] $NOW_UTC -> manipulation: $TOPIC_SEED_OVERRIDE"
-                ;;
-              2026-05-06_15)
-                export TOPIC_SEED_OVERRIDE="Misattribution of arousal: why scary dates feel like love at first sight"
-                echo "[pin] $NOW_UTC -> attraction: $TOPIC_SEED_OVERRIDE"
-                ;;
-            esac
-            python shorts_automation.py --privacy public --upload-thumbnail
-          elif [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
-            python shorts_automation.py --no-upload
-          else
-            PRIVACY="${{ github.event.inputs.privacy || 'public' }}"
-            python shorts_automation.py --privacy "$PRIVACY" --upload-thumbnail
-          fi
+          python shorts_automation.py --privacy public --upload-thumbnail
 
       - name: Upload outputs as artifact
         if: always()

@@ -54,13 +54,17 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 BRAND_DIR = ROOT / "brand"
 FONTS_DIR = ROOT / "fonts"
 ASSETS_DIR = ROOT / "assets"
-MUSIC_PATH = ASSETS_DIR / "bg_music.mp3"  # Kevin MacLeod - Darkest Child (CC BY 3.0)
 
 load_dotenv(ENV_PATH)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+def _clean_key(name):
+    """Strip BOM + whitespace from env var — GitHub Secrets set on Windows can carry \\ufeff."""
+    val = os.getenv(name) or ""
+    return val.lstrip("﻿").strip() or None
+
+GEMINI_API_KEY = _clean_key("GEMINI_API_KEY")
+PEXELS_API_KEY = _clean_key("PEXELS_API_KEY")
+ELEVENLABS_API_KEY = _clean_key("ELEVENLABS_API_KEY")
 
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16
 TARGET_DURATION_RANGE = (28, 55)  # seconds
@@ -638,7 +642,13 @@ def render_video(bg_clips, audio_path, ass_path, audio_duration, output_path,
         audio_map = f"{audio_input_idx}:a"
 
     if music_input_idx is not None:
-        fc_parts.append(f"[{music_input_idx}:a]volume=0.10[bgm]")
+        total_dur = audio_duration + intro_dur
+        fade_out_st = max(0.0, total_dur - 1.0)
+        fc_parts.append(
+            f"[{music_input_idx}:a]volume=0.20,"
+            f"afade=t=in:st=0:d=0.5,"
+            f"afade=t=out:st={fade_out_st:.3f}:d=1.0[bgm]"
+        )
         voice_in = audio_map if audio_map.startswith("[") else f"[{audio_map}]"
         fc_parts.append(f"{voice_in}[bgm]amix=inputs=2:duration=first:normalize=0[final_a]")
         audio_map = "[final_a]"
@@ -766,6 +776,38 @@ def _next_publish_tr_slot(slots_str, now_utc=None):
     return target_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+# --------- 4b. Download background music via yt-dlp ---------
+_MUSIC_QUERIES = [
+    "ytsearch1:ambient psychology background music no copyright",
+    "ytsearch1:dark ambient no copyright background music",
+]
+
+
+def download_bg_music(workdir):
+    """Download a royalty-free ambient track from YouTube Audio Library via yt-dlp.
+    Returns Path to temp_music.mp3 on success, None on failure."""
+    music_path = workdir / "temp_music.mp3"
+    for query in _MUSIC_QUERIES:
+        try:
+            res = subprocess.run(
+                [
+                    sys.executable, "-m", "yt_dlp",
+                    "--no-playlist", "--no-warnings",
+                    "-x", "--audio-format", "mp3", "--audio-quality", "128K",
+                    "-o", str(music_path), query,
+                ],
+                capture_output=True, text=True, timeout=120,
+            )
+            if res.returncode == 0 and music_path.exists():
+                print(f"[music] Indirildi -> {music_path.name}")
+                return music_path
+            print(f"[music] yt-dlp basarisiz ({query}): {res.stderr[-200:]}")
+        except Exception as e:
+            print(f"[music] yt-dlp hatasi: {e}")
+    print("[music] Muzik indirilemedi, sessiz devam ediliyor")
+    return None
+
+
 # --------- Main pipeline ---------
 INTRO_DURATION = 1.2  # thumbnail held as silent intro frame at the start of the short
 
@@ -813,9 +855,13 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         yt_thumb_path = None
 
     out_path = workdir / "short.mp4"
+    music_path = download_bg_music(workdir)
     render_video(clip_paths, audio_path, subs_path, duration, out_path,
                  intro_thumbnail=thumb_path, intro_duration=INTRO_DURATION,
-                 music_path=MUSIC_PATH if MUSIC_PATH.exists() else None)
+                 music_path=music_path)
+    if music_path and music_path.exists():
+        music_path.unlink()
+        print("[music] Gecici muzik dosyasi silindi")
 
     if skip_upload:
         print(f"[main] Yukleme atlandi. Video: {out_path}")
@@ -832,8 +878,6 @@ def run_pipeline(skip_upload=False, privacy="private", auto_public_after=0,
         dt = datetime.now(timezone.utc) + timedelta(seconds=auto_public_after)
         publish_at = dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     description = meta["description"]
-    if MUSIC_PATH.exists():
-        description += "\n\nMusic: Darkest Child by Kevin MacLeod (incompetech.com) | CC BY 3.0"
     video_id = upload_to_youtube(
         out_path,
         meta["title"],

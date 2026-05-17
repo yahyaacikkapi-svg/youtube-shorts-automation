@@ -41,15 +41,6 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Check bulk-upload gate
-        if: github.event_name == 'schedule'
-        run: |
-          TODAY=$(date -u +%Y-%m-%d)
-          if [[ "$TODAY" < "2026-05-26" ]]; then
-            echo "Bulk-upload donemi aktif (bitis: 2026-05-25). Scheduled run atlandi."
-            exit 0
-          fi
-
       - name: Run automation
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
